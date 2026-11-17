@@ -340,7 +340,7 @@ public class OpenStackClient implements Closeable {
     }
 
     public void resizeServer(String serverId, String flavorId) throws Exception {
-        serverAction(serverId, "{\"resize\": {\"flavorRef\": \"" + flavorId + "\"}}");
+        serverAction(serverId, MAPPER.writeValueAsString(Map.of("resize", Map.of("flavorRef", flavorId))));
     }
 
     public void confirmResize(String serverId) throws Exception {
@@ -400,7 +400,7 @@ public class OpenStackClient implements Closeable {
             throw new IllegalStateException("Glance image service URL is not resolved from service catalog.");
         }
         var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
-        var uri = baseImage + "/images/" + imageId;
+        var uri = baseImage + "/images/" + pathSegment(imageId);
         var req = HttpRequest.builder()
             .method("GET")
             .uri(URI.create(uri))
@@ -696,7 +696,7 @@ public class OpenStackClient implements Closeable {
 
     public List<InstanceActionResponses.InstanceAction> listInstanceActions(String serverId, String changesSince) throws Exception {
         authenticate();
-        var uriBuilder = new StringBuilder(this.computeUrl).append("/servers/").append(serverId).append("/os-instance-actions");
+        var uriBuilder = new StringBuilder(this.computeUrl).append("/servers/").append(pathSegment(serverId)).append("/os-instance-actions");
         if (StringUtils.isNotBlank(changesSince)) {
             uriBuilder.append("?changes-since=").append(URLEncoder.encode(changesSince, StandardCharsets.UTF_8));
         }

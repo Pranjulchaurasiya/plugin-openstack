@@ -11,7 +11,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.kestra.plugin.openstack.client.OpenStackClient;
+import io.kestra.plugin.openstack.client.model.ServerPayloads;
+
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
@@ -123,5 +127,91 @@ class OpenStackRequestBuildingTest {
             .build();
 
         assertThrows(Exception.class, () -> task.run(runContextFactory.of()));
+    }
+
+    private void stubImageCatalog() {
+        String tokenBody = String.format("""
+            {"token": {"catalog": [
+              {"type": "compute", "name": "nova", "endpoints": [
+                {"interface": "public", "region": "RegionOne", "url": "http://localhost:%d/compute/v2.1"}]},
+              {"type": "image", "name": "glance", "endpoints": [
+                {"interface": "public", "region": "RegionOne", "url": "http://localhost:%d/image"}]}
+            ]}}
+            """, wireMockServer.port(), wireMockServer.port());
+        wireMockServer.stubFor(post(urlEqualTo("/v3/auth/tokens"))
+            .willReturn(aResponse().withStatus(201)
+                .withHeader("Content-Type", "application/json")
+                .withHeader("X-Subject-Token", "tok")
+                .withBody(tokenBody)));
+    }
+
+    private OpenStackClient client() throws Exception {
+        return OpenStackClient.builder()
+            .runContext(runContextFactory.of())
+            .authUrl(authUrl)
+            .applicationCredentialId("id")
+            .applicationCredentialSecret("secret")
+            .build();
+    }
+
+    @Test
+    void imageIdIsEncodedInPath() throws Exception {
+        stubImageCatalog();
+        wireMockServer.stubFor(get(urlEqualTo("/image/v2/images/a%2F..%2Fb%3Fc"))
+            .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json")
+                .withBody("{\"id\": \"resolved\"}")));
+
+        try (var client = client()) {
+            client.getImage("a/../b?c");
+        }
+
+        wireMockServer.verify(1, getRequestedFor(urlEqualTo("/image/v2/images/a%2F..%2Fb%3Fc")));
+    }
+
+    @Test
+    void dotSegmentImageIdIsRejected() throws Exception {
+        stubImageCatalog();
+        try (var client = client()) {
+            assertThrows(IllegalArgumentException.class, () -> client.getImage(".."));
+        }
+    }
+
+    @Test
+    void instanceActionsServerIdIsEncodedInPath() throws Exception {
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/a%2Fb%3Fc/os-instance-actions"))
+            .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json")
+                .withBody("{\"instanceActions\": []}")));
+
+        try (var client = client()) {
+            client.listInstanceActions("a/b?c", null);
+        }
+
+        wireMockServer.verify(1, getRequestedFor(urlPathEqualTo("/compute/v2.1/servers/a%2Fb%3Fc/os-instance-actions")));
+    }
+
+    @Test
+    void resizeBodyEscapesFlavorId() throws Exception {
+        wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
+            .withRequestBody(equalToJson("{\"resize\": {\"flavorRef\": \"f\\\",\\\"x\\\":\\\"y\"}}"))
+            .willReturn(aResponse().withStatus(202)));
+
+        try (var client = client()) {
+            client.resizeServer("srv-01", "f\",\"x\":\"y");
+        }
+
+        wireMockServer.verify(1, postRequestedFor(urlEqualTo("/compute/v2.1/servers/srv-01/action")));
+    }
+
+    @Test
+    void toStringDoesNotContainCredentials() {
+        var trigger = Trigger.builder()
+            .applicationCredentialSecret(Property.ofValue("app-secret-value"))
+            .password(Property.ofValue("pw-secret-value"))
+            .build();
+        assertFalse(trigger.toString().contains("app-secret-value"));
+        assertFalse(trigger.toString().contains("pw-secret-value"));
+
+        var data = ServerPayloads.ServerData.builder().name("n").adminPass("admin-pass-value").build();
+        assertFalse(data.toString().contains("admin-pass-value"));
     }
 }

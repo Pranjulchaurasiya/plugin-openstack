@@ -55,6 +55,7 @@ public class ServerPayloads {
         @JsonProperty("metadata")
         private Map<String, String> metadata;
 
+        @ToString.Exclude
         @JsonProperty("adminPass")
         private String adminPass;
 

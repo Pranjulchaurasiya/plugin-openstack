@@ -11,6 +11,7 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.serializers.JacksonMapper;
 import io.kestra.plugin.openstack.client.model.*;
 import lombok.Builder;
+import lombok.AccessLevel;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
 
@@ -20,7 +21,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-@Getter
 public class OpenStackClient implements Closeable {
 
     private static final String DEFAULT_DOMAIN = "Default";
@@ -28,21 +28,36 @@ public class OpenStackClient implements Closeable {
     private static final String NOVA_MICROVERSION = "2.58";
     private static final ObjectMapper MAPPER = JacksonMapper.ofJson();
 
+    @Getter
     private final RunContext runContext;
+    @Getter
     private final HttpClient httpClient;
+    @Getter
     private final String authUrl;
+    @Getter
     private final String applicationCredentialId;
+    @Getter(AccessLevel.NONE)
     private final String applicationCredentialSecret;
+    @Getter
     private final String username;
+    @Getter(AccessLevel.NONE)
     private final String password;
+    @Getter
     private final String projectName;
+    @Getter
     private final String userDomainName;
+    @Getter
     private final String projectDomainName;
+    @Getter
     private final String region;
+    @Getter
     private final String endpointType;
 
+    @Getter(AccessLevel.NONE)
     private String token;
+    @Getter
     private String computeUrl;
+    @Getter
     private String imageUrl;
 
     @Builder
@@ -72,6 +87,13 @@ public class OpenStackClient implements Closeable {
         this.projectDomainName = StringUtils.isNotBlank(projectDomainName) ? projectDomainName : DEFAULT_DOMAIN;
         this.region = region;
         this.endpointType = StringUtils.isNotBlank(endpointType) ? endpointType : DEFAULT_INTERFACE;
+    }
+
+    private static String pathSegment(String value) {
+        if (StringUtils.isBlank(value) || value.equals(".") || value.equals("..")) {
+            throw new IllegalArgumentException("Invalid resource identifier: '" + value + "'.");
+        }
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     private static String cleanUrl(String url) {
@@ -216,7 +238,7 @@ public class OpenStackClient implements Closeable {
 
     public Server getServer(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + serverId;
+        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
 
         HttpRequest req = computeRequest("GET", uri, null);
         HttpResponse<String> resp = executeHttp(req, String.class);
@@ -251,7 +273,7 @@ public class OpenStackClient implements Closeable {
 
     public Server updateServer(String serverId, ServerPayloads.Update payload) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + serverId;
+        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
         String body = MAPPER.writeValueAsString(payload);
 
         HttpRequest req = computeRequest("PUT", uri, body);
@@ -262,14 +284,14 @@ public class OpenStackClient implements Closeable {
 
     public void deleteServer(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + serverId;
+        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
         HttpRequest req = computeRequest("DELETE", uri, null);
         executeHttp(req, String.class);
     }
 
     public String serverAction(String serverId, String actionJson) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + serverId + "/action";
+        String uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/action";
         HttpRequest req = computeRequest("POST", uri, actionJson);
         HttpResponse<String> resp = executeHttp(req, String.class);
         return resp.getBody();
@@ -284,8 +306,11 @@ public class OpenStackClient implements Closeable {
     }
 
     public void rebootServer(String serverId, String type) throws Exception {
-        String rebootType = StringUtils.isNotBlank(type) ? type.toUpperCase(Locale.ROOT) : "SOFT";
-        serverAction(serverId, "{\"reboot\": {\"type\": \"" + rebootType + "\"}}");
+        String rebootType = StringUtils.isNotBlank(type) ? type.trim().toUpperCase(Locale.ROOT) : "SOFT";
+        if (!rebootType.equals("SOFT") && !rebootType.equals("HARD")) {
+            throw new IllegalArgumentException("Invalid reboot type '" + type + "': expected SOFT or HARD.");
+        }
+        serverAction(serverId, MAPPER.writeValueAsString(Map.of("reboot", Map.of("type", rebootType))));
     }
 
     public void suspendServer(String serverId) throws Exception {
@@ -315,12 +340,12 @@ public class OpenStackClient implements Closeable {
     }
 
     public void restoreServer(String serverId, String imageRef) throws Exception {
-        serverAction(serverId, "{\"rebuild\": {\"imageRef\": \"" + imageRef + "\"}}");
+        serverAction(serverId, MAPPER.writeValueAsString(Map.of("rebuild", Map.of("imageRef", imageRef))));
     }
 
     public Map<String, String> getServerMetadata(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + serverId + "/metadata";
+        String uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/metadata";
         HttpRequest req = computeRequest("GET", uri, null);
         HttpResponse<String> resp = executeHttp(req, String.class);
         ServerResponses.Metadata meta = MAPPER.readValue(resp.getBody(), ServerResponses.Metadata.class);
@@ -354,7 +379,7 @@ public class OpenStackClient implements Closeable {
             throw new IllegalStateException("Glance image service URL is not resolved from service catalog.");
         }
         String baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
-        String uri = baseImage + "/images/" + imageId;
+        String uri = baseImage + "/images/" + pathSegment(imageId);
         HttpRequest req = HttpRequest.builder()
             .method("DELETE")
             .uri(URI.create(uri))

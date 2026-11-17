@@ -207,7 +207,6 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
                 .server(server)
                 .serverId(server.getId())
                 .status(server.getStatus())
-                .adminPass(server.getAdminPass())
                 .build();
         }
     }
@@ -277,13 +276,5 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
                 """
         )
         private final String status;
-
-        @Schema(
-            title = "Generated admin password",
-            description = """
-                The administrative password returned by Nova if generated automatically.
-                """
-        )
-        private final String adminPass;
     }
 }

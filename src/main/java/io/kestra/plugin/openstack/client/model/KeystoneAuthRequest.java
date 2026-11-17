@@ -67,6 +67,7 @@ public class KeystoneAuthRequest {
         @JsonProperty("id")
         private String id;
 
+        @ToString.Exclude
         @JsonProperty("secret")
         private String secret;
     }
@@ -97,6 +98,7 @@ public class KeystoneAuthRequest {
         @JsonProperty("domain")
         private Domain domain;
 
+        @ToString.Exclude
         @JsonProperty("password")
         private String password;
     }

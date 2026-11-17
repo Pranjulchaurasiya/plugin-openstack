@@ -49,9 +49,6 @@ public class Server {
     @JsonProperty("key_name")
     private String keyName;
 
-    @JsonProperty("adminPass")
-    private String adminPass;
-
     @JsonProperty("description")
     private String description;
 

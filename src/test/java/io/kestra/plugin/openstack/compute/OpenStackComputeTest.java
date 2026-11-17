@@ -6,6 +6,7 @@ import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.serializers.JacksonMapper;
 import io.kestra.plugin.openstack.client.model.GlanceResponses;
 import io.kestra.plugin.openstack.client.model.Server;
 import jakarta.inject.Inject;
@@ -125,7 +126,7 @@ class OpenStackComputeTest {
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-9a2f-test-01"));
         assertThat(output.getStatus(), is("BUILD"));
-        assertThat(output.getAdminPass(), is("GeneratedAdminPass123"));
+        assertThat(JacksonMapper.ofJson().writeValueAsString(output), not(containsString("GeneratedAdminPass123")));
     }
 
     @Test

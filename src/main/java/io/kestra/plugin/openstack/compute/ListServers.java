@@ -7,6 +7,7 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.openstack.client.OpenStackClient;
+import io.kestra.plugin.openstack.client.SafeRegex;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
@@ -141,10 +142,10 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             List<Server> servers = client.listServers(queryParams);
 
             if (rNameRegex != null && !rNameRegex.isBlank()) {
-                Pattern pattern = Pattern.compile(rNameRegex);
+                Pattern pattern = SafeRegex.compile(rNameRegex);
                 List<Server> filtered = new ArrayList<>();
                 for (Server s : servers) {
-                    if (s.getName() != null && pattern.matcher(s.getName()).matches()) {
+                    if (s.getName() != null && SafeRegex.matches(pattern, s.getName())) {
                         filtered.add(s);
                     }
                 }

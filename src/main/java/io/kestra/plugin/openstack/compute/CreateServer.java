@@ -188,11 +188,9 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
 
         try (var client = this.createClient(runContext)) {
-            // Resolve names to IDs (Finding #4)
             var resolvedFlavorId = client.resolveFlavorId(rFlavorRef);
             var resolvedImageId = client.resolveImageId(rImageRef);
 
-            // Auto-base64 encode userData if plain text (Finding #3)
             String encodedUserData = null;
             if (rUserData != null && !rUserData.isBlank()) {
                 var trimmed = rUserData.trim();
@@ -224,11 +222,13 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
                 }
             }
 
+            Object networksPayload = (networkRefs != null && !networkRefs.isEmpty()) ? networkRefs : "auto";
+
             var serverData = ServerPayloads.ServerData.builder()
                 .name(rName)
                 .flavorRef(resolvedFlavorId)
                 .imageRef(resolvedImageId)
-                .networks(networkRefs)
+                .networks(networksPayload)
                 .keyName(rKeyName)
                 .userData(encodedUserData)
                 .metadata(rMetadata != null && !rMetadata.isEmpty() ? rMetadata : null)

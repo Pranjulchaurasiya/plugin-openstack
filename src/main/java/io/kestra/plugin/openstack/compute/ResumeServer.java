@@ -53,4 +53,9 @@ public class ResumeServer extends AbstractServerActionTask {
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.resumeServer(serverId);
     }
+
+    @Override
+    protected String expectedStatus() {
+        return "ACTIVE";
+    }
 }

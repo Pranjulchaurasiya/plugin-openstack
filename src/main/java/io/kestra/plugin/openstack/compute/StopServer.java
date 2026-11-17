@@ -53,4 +53,9 @@ public class StopServer extends AbstractServerActionTask {
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.stopServer(serverId);
     }
+
+    @Override
+    protected String expectedStatus() {
+        return "SHUTOFF";
+    }
 }

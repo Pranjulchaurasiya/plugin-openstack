@@ -8,10 +8,11 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.common.FetchType;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.serializers.FileSerde;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.SafeRegex;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 
@@ -21,8 +22,6 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.regex.Pattern;
 
 @SuperBuilder
 @ToString
@@ -38,21 +37,38 @@ import java.util.regex.Pattern;
 @Plugin(
     examples = {
         @Example(
-            title = "List all active OpenStack servers",
+            title = "List and fetch all active servers matching a regular expression",
             full = true,
             code = """
-                id: list_openstack_servers
-                namespace: company.team
+                id: list_active_openstack_servers
+                namespace: company.openstack
 
                 tasks:
                   - id: list_servers
                     type: io.kestra.plugin.openstack.compute.ListServers
-                    authUrl: "https://keystone.company.local:5000/v3"
-                    applicationCredentialId: "{{ secret('OPENSTACK_APP_CREDENTIAL_ID') }}"
-                    applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
+                    authUrl: "https://keystone.example.com:5000/v3"
+                    applicationCredentialId: "{{ secret('OPENSTACK_APP_CRED_ID') }}"
+                    applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CRED_SECRET') }}"
                     status: "ACTIVE"
-                    nameRegex: "kestra-.*"
+                    nameRegex: "^prod-.*"
                     fetchType: FETCH
+                """
+        ),
+        @Example(
+            title = "Stream thousands of servers to Kestra internal storage in ION format",
+            full = true,
+            code = """
+                id: store_large_openstack_inventory
+                namespace: company.openstack
+
+                tasks:
+                  - id: store_servers
+                    type: io.kestra.plugin.openstack.compute.ListServers
+                    authUrl: "https://keystone.example.com:5000/v3"
+                    applicationCredentialId: "{{ secret('OPENSTACK_APP_CRED_ID') }}"
+                    applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CRED_SECRET') }}"
+                    fetchType: STORE
+                    limit: 500
                 """
         )
     }
@@ -60,37 +76,41 @@ import java.util.regex.Pattern;
 public class ListServers extends AbstractComputeTask implements RunnableTask<ListServers.Output> {
 
     @Schema(
-        title = "Fetch mode",
+        title = "Output fetch type",
         description = """
-            Output retrieval type: `FETCH` (in-memory list), `FETCH_ONE` (first matched server), or `STORE` (persisted to internal storage). Defaults to `FETCH`.
+            Determines how results are processed and returned:
+            - `FETCH`: collects servers into a list in the task output.
+            - `FETCH_ONE`: returns the single first matching server.
+            - `STORE`: streams all matching servers directly to Kestra internal storage in ION format without buffering in heap.
+            Defaults to `FETCH`.
             """
     )
-    @PluginProperty(group = "main")
+    @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<FetchType> fetchType = Property.ofValue(FetchType.FETCH);
 
     @Schema(
         title = "Server status filter",
         description = """
-            Filter servers by their current status (e.g. `ACTIVE`, `SHUTOFF`, `PAUSED`, `ERROR`).
+            Filter servers by power/lifecycle status (e.g. `ACTIVE`, `SHUTOFF`, `PAUSED`, `ERROR`).
             """
     )
-    @PluginProperty(group = "main")
+    @PluginProperty(group = "advanced")
     private Property<String> status;
 
     @Schema(
-        title = "Server name filter",
+        title = "Exact server name filter",
         description = """
-            Filter servers by exact name or prefix in the OpenStack API query.
+            Filter servers by exact name matching.
             """
     )
-    @PluginProperty(group = "main")
+    @PluginProperty(group = "advanced")
     private Property<String> name;
 
     @Schema(
         title = "Server name regex filter",
         description = """
-            Optional regular expression to filter server names in Kestra after retrieval.
+            Client-side regex filter applied against server names before returning results.
             """
     )
     @PluginProperty(group = "advanced")
@@ -106,13 +126,25 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
     private Property<String> changesSince;
 
     @Schema(
-        title = "Results limit",
+        title = "Maximum number of servers to return",
         description = """
-            Maximum number of server records to return.
+            Limits the maximum number of servers returned. Must be between 1 and 1000.
+            Defaults to 100.
             """
     )
     @PluginProperty(group = "advanced")
-    private Property<Integer> limit;
+    @Builder.Default
+    private Property<@Min(1) @Max(1000) Integer> limit = Property.ofValue(100);
+
+    @Schema(
+        title = "Page size for pagination",
+        description = """
+            Number of servers to request per page from Nova. Must be between 1 and 1000. Defaults to 100.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<@Min(1) @Max(1000) Integer> pageSize = Property.ofValue(100);
 
     @Schema(
         title = "Pagination marker",
@@ -132,7 +164,8 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
         var rName = runContext.render(this.name).as(String.class).orElse(null);
         var rNameRegex = runContext.render(this.nameRegex).as(String.class).orElse(null);
         var rChangesSince = runContext.render(this.changesSince).as(String.class).orElse(null);
-        var rLimit = runContext.render(this.limit).as(Integer.class).orElse(null);
+        var rLimit = runContext.render(this.limit).as(Integer.class).orElse(100);
+        var rPageSize = runContext.render(this.pageSize).as(Integer.class).orElse(100);
         var rMarker = runContext.render(this.marker).as(String.class).orElse(null);
 
         var queryParams = new HashMap<String, String>();
@@ -146,11 +179,50 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             queryParams.put("changes-since", rChangesSince);
         }
 
-        var allServers = new ArrayList<Server>();
+        var pattern = (rNameRegex != null && !rNameRegex.isBlank()) ? SafeRegex.compile(rNameRegex) : null;
         var currentMarker = rMarker;
-        var pageSize = rLimit != null ? Math.min(rLimit, 100) : 100;
+        var pageSize = Math.min(rLimit, rPageSize);
 
         try (var client = this.createClient(runContext)) {
+            if (rFetchType == FetchType.STORE) {
+                var tempFile = runContext.workingDir().createTempFile(".ion").toFile();
+                var count = 0;
+                try (var outputStream = new BufferedOutputStream(new FileOutputStream(tempFile))) {
+                    while (true) {
+                        var pageParams = new HashMap<>(queryParams);
+                        pageParams.put("limit", String.valueOf(pageSize));
+                        if (currentMarker != null) {
+                            pageParams.put("marker", currentMarker);
+                        }
+
+                        var batch = client.listServers(pageParams);
+                        if (batch == null || batch.isEmpty()) {
+                            break;
+                        }
+
+                        for (var s : batch) {
+                            if (pattern == null || (s.getName() != null && SafeRegex.matches(pattern, s.getName()))) {
+                                FileSerde.write(outputStream, s);
+                                count++;
+                                if (count >= rLimit) {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (count >= rLimit || batch.size() < pageSize) {
+                            break;
+                        }
+
+                        currentMarker = batch.getLast().getId();
+                    }
+                }
+                var uri = runContext.storage().putFile(tempFile);
+                logger.info("Streamed {} OpenStack compute server(s) to internal storage URI '{}'.", count, uri);
+                return Output.builder().size(count).uri(uri).build();
+            }
+
+            var matchingServers = new ArrayList<Server>();
             while (true) {
                 var pageParams = new HashMap<>(queryParams);
                 pageParams.put("limit", String.valueOf(pageSize));
@@ -163,50 +235,34 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
                     break;
                 }
 
-                allServers.addAll(batch);
-
-                if (rLimit != null && allServers.size() >= rLimit) {
-                    allServers = new ArrayList<>(allServers.subList(0, rLimit));
-                    break;
-                }
-
-                if (batch.size() < pageSize) {
-                    break;
-                }
-
-                currentMarker = batch.get(batch.size() - 1).getId();
-            }
-
-            if (rNameRegex != null && !rNameRegex.isBlank()) {
-                var pattern = SafeRegex.compile(rNameRegex);
-                var filtered = new ArrayList<Server>();
-                for (var s : allServers) {
-                    if (s.getName() != null && SafeRegex.matches(pattern, s.getName())) {
-                        filtered.add(s);
+                for (var s : batch) {
+                    if (pattern == null || (s.getName() != null && SafeRegex.matches(pattern, s.getName()))) {
+                        matchingServers.add(s);
+                        if (rFetchType == FetchType.FETCH_ONE) {
+                            logger.info("Found single server '{}' for FETCH_ONE mode.", s.getId());
+                            return Output.builder().size(1).server(s).build();
+                        }
+                        if (matchingServers.size() >= rLimit) {
+                            break;
+                        }
                     }
                 }
-                allServers = filtered;
+
+                if (matchingServers.size() >= rLimit || batch.size() < pageSize) {
+                    break;
+                }
+
+                currentMarker = batch.getLast().getId();
             }
 
-            logger.info("Found {} OpenStack compute server(s). FetchType: {}", allServers.size(), rFetchType);
-
-            var builder = Output.builder().size(allServers.size());
+            logger.info("Found {} OpenStack compute server(s). FetchType: {}", matchingServers.size(), rFetchType);
 
             if (rFetchType == FetchType.FETCH_ONE) {
-                var single = allServers.isEmpty() ? null : allServers.get(0);
-                return builder.server(single).build();
-            } else if (rFetchType == FetchType.STORE) {
-                var tempFile = runContext.workingDir().createTempFile(".ion").toFile();
-                try (var output = new BufferedOutputStream(new FileOutputStream(tempFile))) {
-                    for (var s : allServers) {
-                        FileSerde.write(output, s);
-                    }
-                }
-                var uri = runContext.storage().putFile(tempFile);
-                return builder.uri(uri).build();
-            } else {
-                return builder.servers(allServers).build();
+                var single = matchingServers.isEmpty() ? null : matchingServers.getFirst();
+                return Output.builder().size(matchingServers.size()).server(single).build();
             }
+
+            return Output.builder().size(matchingServers.size()).servers(matchingServers).build();
         }
     }
 
@@ -214,17 +270,17 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Retrieved servers",
+            title = "List of servers",
             description = """
-                List of detailed server objects matching the query criteria (populated when fetchType is `FETCH`).
+                The servers retrieved from OpenStack Nova (populated when `fetchType: FETCH`).
                 """
         )
         private final List<Server> servers;
 
         @Schema(
-            title = "Single server",
+            title = "Single server record",
             description = """
-                First matched server object (populated when fetchType is `FETCH_ONE`).
+                The first matching server (populated when `fetchType: FETCH_ONE`).
                 """
         )
         private final Server server;
@@ -232,15 +288,15 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
         @Schema(
             title = "Internal storage URI",
             description = """
-                URI of stored results file in Kestra internal storage (populated when fetchType is `STORE`).
+                URI of the stored ION file in Kestra internal storage (populated when `fetchType: STORE`).
                 """
         )
         private final URI uri;
 
         @Schema(
-            title = "Number of servers found",
+            title = "Total servers count",
             description = """
-                The count of servers returned or stored.
+                The total number of servers retrieved or written.
                 """
         )
         private final int size;

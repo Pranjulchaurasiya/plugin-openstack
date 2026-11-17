@@ -269,7 +269,8 @@ public class OpenStackClient implements Closeable {
         if (queryParams != null && !queryParams.isEmpty()) {
             uriBuilder.append("?");
             var first = true;
-            for (var entry : queryParams.entrySet()) {
+            var sortedParams = new TreeMap<>(queryParams);
+            for (var entry : sortedParams.entrySet()) {
                 if (entry.getValue() != null) {
                     if (!first) {
                         uriBuilder.append("&");
@@ -458,10 +459,57 @@ public class OpenStackClient implements Closeable {
         return res != null && res.getFlavors() != null ? res.getFlavors() : Collections.emptyList();
     }
 
+    public String resolveServerId(String serverNameOrId) throws Exception {
+        if (StringUtils.isBlank(serverNameOrId)) {
+            return null;
+        }
+        authenticate();
+        try {
+            var directServer = getServer(serverNameOrId);
+            if (directServer != null && directServer.getId() != null) {
+                return directServer.getId();
+            }
+        } catch (Exception ignored) {
+        }
+
+        var uri = this.computeUrl + "/servers?name=" + URLEncoder.encode(serverNameOrId, StandardCharsets.UTF_8);
+        var req = computeRequest("GET", uri, null);
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, ServerResponses.MultipleServers.class, "resolve server by name");
+        var servers = res != null && res.getServers() != null ? res.getServers() : Collections.<Server>emptyList();
+
+        if (servers.isEmpty()) {
+            throw new IllegalArgumentException("OpenStack server not found: '" + serverNameOrId + "'");
+        }
+        if (servers.size() > 1) {
+            throw new IllegalArgumentException("Ambiguous OpenStack server: '" + serverNameOrId + "' matches "
+                + servers.size() + " servers. Please specify the exact server UUID.");
+        }
+        return servers.getFirst().getId();
+    }
+
+    public FlavorResponses.Flavor getFlavor(String flavorId) throws Exception {
+        authenticate();
+        var uri = this.computeUrl + "/flavors/" + pathSegment(flavorId);
+        var req = computeRequest("GET", uri, null);
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, FlavorResponses.SingleFlavor.class, "get flavor");
+        return res != null ? res.getFlavor() : null;
+    }
+
     public String resolveFlavorId(String flavorNameOrId) throws Exception {
         if (StringUtils.isBlank(flavorNameOrId)) {
             return null;
         }
+        authenticate();
+        try {
+            var directFlavor = getFlavor(flavorNameOrId);
+            if (directFlavor != null && directFlavor.getId() != null) {
+                return directFlavor.getId();
+            }
+        } catch (Exception ignored) {
+        }
+
         var flavors = listFlavors();
         var matches = new ArrayList<FlavorResponses.Flavor>();
         for (var flv : flavors) {
@@ -476,7 +524,7 @@ public class OpenStackClient implements Closeable {
             throw new IllegalArgumentException("Ambiguous OpenStack flavor: '" + flavorNameOrId + "' matches "
                 + matches.size() + " flavors. Please specify the exact flavor UUID.");
         }
-        return matches.get(0).getId();
+        return matches.getFirst().getId();
     }
 
     public String resolveImageId(String imageNameOrId) throws Exception {
@@ -489,7 +537,6 @@ public class OpenStackClient implements Closeable {
         }
         var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
 
-        // Try direct lookup by ID first if UUID pattern
         try {
             var directImage = getImage(imageNameOrId);
             if (directImage != null && directImage.getId() != null) {
@@ -498,7 +545,6 @@ public class OpenStackClient implements Closeable {
         } catch (Exception ignored) {
         }
 
-        // Query by name
         var uri = baseImage + "/images?name=" + URLEncoder.encode(imageNameOrId, StandardCharsets.UTF_8);
         var req = HttpRequest.builder()
             .method("GET")
@@ -518,7 +564,7 @@ public class OpenStackClient implements Closeable {
             throw new IllegalArgumentException("Ambiguous OpenStack image: '" + imageNameOrId + "' matches "
                 + images.size() + " images. Please specify the exact image UUID.");
         }
-        return images.get(0).getId();
+        return images.getFirst().getId();
     }
 
     public String resolveNetworkId(String networkNameOrId) throws Exception {
@@ -527,45 +573,57 @@ public class OpenStackClient implements Closeable {
         }
         authenticate();
         if (this.networkUrl == null) {
-            // If no network service in catalog, return networkNameOrId as is
             return networkNameOrId;
         }
         var baseNetwork = this.networkUrl.endsWith("/v2.0") ? this.networkUrl : this.networkUrl + "/v2.0";
-        var uri = baseNetwork + "/networks";
-        var req = HttpRequest.builder()
+
+        var uriByName = baseNetwork + "/networks?name=" + URLEncoder.encode(networkNameOrId, StandardCharsets.UTF_8);
+        var reqByName = HttpRequest.builder()
             .method("GET")
-            .uri(URI.create(uri))
+            .uri(URI.create(uriByName))
             .addHeader("X-Auth-Token", this.token)
             .addHeader("Accept", "application/json")
             .build();
 
-        var resp = executeHttp(req, String.class);
-        var res = parseResponse(resp, NetworkResponses.MultipleNetworks.class, "resolve network");
-        var networks = res != null && res.getNetworks() != null ? res.getNetworks() : Collections.<NetworkResponses.Network>emptyList();
+        var respByName = executeHttp(reqByName, String.class);
+        var resByName = parseResponse(respByName, NetworkResponses.MultipleNetworks.class, "resolve network by name");
+        var networksByName = resByName != null && resByName.getNetworks() != null ? resByName.getNetworks() : Collections.<NetworkResponses.Network>emptyList();
 
-        var matches = new ArrayList<NetworkResponses.Network>();
-        for (var net : networks) {
-            if (networkNameOrId.equals(net.getId()) || networkNameOrId.equalsIgnoreCase(net.getName())) {
-                matches.add(net);
-            }
+        if (networksByName.size() == 1) {
+            return networksByName.getFirst().getId();
         }
-        if (matches.isEmpty()) {
-            throw new IllegalArgumentException("OpenStack network not found: '" + networkNameOrId + "'");
-        }
-        if (matches.size() > 1) {
+        if (networksByName.size() > 1) {
             throw new IllegalArgumentException("Ambiguous OpenStack network: '" + networkNameOrId + "' matches "
-                + matches.size() + " networks. Please specify the exact network UUID.");
+                + networksByName.size() + " networks. Please specify the exact network UUID.");
         }
-        return matches.get(0).getId();
+
+        var uriById = baseNetwork + "/networks?id=" + URLEncoder.encode(networkNameOrId, StandardCharsets.UTF_8);
+        var reqById = HttpRequest.builder()
+            .method("GET")
+            .uri(URI.create(uriById))
+            .addHeader("X-Auth-Token", this.token)
+            .addHeader("Accept", "application/json")
+            .build();
+
+        var respById = executeHttp(reqById, String.class);
+        var resById = parseResponse(respById, NetworkResponses.MultipleNetworks.class, "resolve network by id");
+        var networksById = resById != null && resById.getNetworks() != null ? resById.getNetworks() : Collections.<NetworkResponses.Network>emptyList();
+
+        if (!networksById.isEmpty()) {
+            return networksById.getFirst().getId();
+        }
+
+        throw new IllegalArgumentException("OpenStack network not found: '" + networkNameOrId + "'");
     }
 
     public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout, RunContext runContext) throws Exception {
         var start = Instant.now();
         var limit = timeout != null ? timeout : Duration.ofMinutes(10);
+        long sleepMs = 1000;
 
         while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
             var img = getImage(imageId);
-            var status = img.getStatus();
+            var status = img != null ? img.getStatus() : null;
             if ("active".equalsIgnoreCase(status)) {
                 return img;
             }
@@ -573,7 +631,8 @@ public class OpenStackClient implements Closeable {
                 throw new IllegalStateException("Snapshot image '" + imageId + "' entered failure status: " + status);
             }
             try {
-                Thread.sleep(1000);
+                Thread.sleep(sleepMs);
+                sleepMs = Math.min(sleepMs + 1000, 5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Interrupted while polling image active status", e);
@@ -585,6 +644,7 @@ public class OpenStackClient implements Closeable {
     public Server waitForServerStatus(String serverId, String targetStatus, Duration timeout, RunContext runContext) throws Exception {
         var start = Instant.now();
         var limit = timeout != null ? timeout : Duration.ofMinutes(10);
+        long sleepMs = 1000;
 
         while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
             var srv = getServer(serverId);
@@ -596,7 +656,8 @@ public class OpenStackClient implements Closeable {
                 throw new IllegalStateException("Server '" + serverId + "' entered ERROR status.");
             }
             try {
-                Thread.sleep(1000);
+                Thread.sleep(sleepMs);
+                sleepMs = Math.min(sleepMs + 1000, 5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Interrupted while polling server status", e);

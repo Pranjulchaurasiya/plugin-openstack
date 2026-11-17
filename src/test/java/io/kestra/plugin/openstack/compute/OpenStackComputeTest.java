@@ -16,6 +16,7 @@ import io.kestra.plugin.openstack.client.model.Server;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -247,7 +248,6 @@ class OpenStackComputeTest {
 
         var runContext = runContextFactory.of();
 
-        // 1. FETCH mode with regex
         var fetchTask = ListServers.builder()
             .id("list_servers_fetch_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -262,7 +262,6 @@ class OpenStackComputeTest {
         assertThat(fetchOut.getSize(), is(2));
         assertThat(fetchOut.getServers().getFirst().getName(), is("prod-app-01"));
 
-        // 2. FETCH_ONE mode
         var fetchOneTask = ListServers.builder()
             .id("list_servers_one_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -276,7 +275,6 @@ class OpenStackComputeTest {
         assertNotNull(oneOut.getServer());
         assertThat(oneOut.getServer().getName(), is("prod-app-01"));
 
-        // 3. STORE mode
         var storeTask = ListServers.builder()
             .id("list_servers_store_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -309,7 +307,6 @@ class OpenStackComputeTest {
         var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getServerId(), is("srv-01"));
     }
 
     @Test
@@ -331,7 +328,6 @@ class OpenStackComputeTest {
         var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getServerId(), is("srv-01"));
     }
 
     @Test
@@ -354,8 +350,7 @@ class OpenStackComputeTest {
         var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getServerId(), is("srv-01"));
-        assertThat(output.getRebootType(), is(RebootType.HARD));
+        wireMockServer.verify(1, postRequestedFor(urlEqualTo("/compute/v2.1/servers/srv-01/action")));
     }
 
     @Test
@@ -377,7 +372,6 @@ class OpenStackComputeTest {
         var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getServerId(), is("srv-01"));
     }
 
     @Test
@@ -400,7 +394,7 @@ class OpenStackComputeTest {
             .serverId(Property.ofValue("srv-01"))
             .build();
         var suspendOut = suspendTask.run(runContext);
-        assertThat(suspendOut.getServerId(), is("srv-01"));
+        assertNotNull(suspendOut);
 
         var resumeTask = ResumeServer.builder()
             .id("resume_server_" + IdUtils.create())
@@ -410,7 +404,7 @@ class OpenStackComputeTest {
             .serverId(Property.ofValue("srv-01"))
             .build();
         var resumeOut = resumeTask.run(runContext);
-        assertThat(resumeOut.getServerId(), is("srv-01"));
+        assertNotNull(resumeOut);
     }
 
     @Test
@@ -431,7 +425,7 @@ class OpenStackComputeTest {
         var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getServerId(), is("srv-01"));
+        wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/compute/v2.1/servers/srv-01")));
     }
 
     @Test
@@ -542,7 +536,6 @@ class OpenStackComputeTest {
 
         var runContext = runContextFactory.of();
 
-        // 1. Create snapshot
         var createSnap = CreateServerSnapshot.builder()
             .id("create_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -554,7 +547,6 @@ class OpenStackComputeTest {
         var createSnapOut = createSnap.run(runContext);
         assertThat(createSnapOut.getImageId(), is("snap-image-uuid-123"));
 
-        // 2. List snapshots
         var listSnap = ListServerSnapshots.builder()
             .id("list_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -566,7 +558,6 @@ class OpenStackComputeTest {
         assertThat(listSnapOut.getSize(), is(1));
         assertThat(listSnapOut.getSnapshots().getFirst().getId(), is("snap-image-uuid-123"));
 
-        // 3. Restore snapshot
         var restore = RestoreServerFromSnapshot.builder()
             .id("restore_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -578,7 +569,6 @@ class OpenStackComputeTest {
         var restoreOut = restore.run(runContext);
         assertThat(restoreOut.getImageId(), is("snap-image-uuid-123"));
 
-        // 4. Delete snapshot
         var deleteSnap = DeleteServerSnapshot.builder()
             .id("del_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
@@ -587,12 +577,11 @@ class OpenStackComputeTest {
             .imageId(Property.ofValue("snap-image-uuid-123"))
             .build();
         var deleteSnapOut = deleteSnap.run(runContext);
-        assertThat(deleteSnapOut.getImageId(), is("snap-image-uuid-123"));
+        assertThat(deleteSnapOut.getDeleted(), is(true));
     }
 
     @Test
     void testCloneServerWithImageStatusTransition() throws Exception {
-        // Source server details
         wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/source-srv-01"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -607,7 +596,6 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        // Create snapshot from source
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/source-srv-01/action"))
             .withRequestBody(containing("createImage"))
             .willReturn(aResponse()
@@ -615,7 +603,6 @@ class OpenStackComputeTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"image_id\": \"snap-clone-image-1\"}")));
 
-        // Snapshot transitions queued -> active via WireMock Scenario
         wireMockServer.stubFor(get(urlEqualTo("/image/v2/images/snap-clone-image-1"))
             .inScenario("SnapshotStatusTransition")
             .whenScenarioStateIs(Scenario.STARTED)
@@ -633,7 +620,6 @@ class OpenStackComputeTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"id\": \"snap-clone-image-1\", \"status\": \"active\"}")));
 
-        // Provision new server from snapshot
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers"))
             .willReturn(aResponse()
                 .withStatus(202)
@@ -663,7 +649,6 @@ class OpenStackComputeTest {
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("clone-srv-01"));
-        assertThat(output.getSourceServerId(), is("source-srv-01"));
         assertThat(output.getSnapshotImageId(), is("snap-clone-image-1"));
     }
 
@@ -764,6 +749,256 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
         assertNotNull(output);
-        assertThat(output.getServerId(), is("dyn-srv-999"));
+        wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/compute/v2.1/servers/dyn-srv-999")));
+    }
+
+    @Test
+    void testUpdateServerWithResizeConfirmScenario() throws Exception {
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/flv-large"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"flavor\": {\"id\": \"flv-large\", \"name\": \"m1.large\"}}")));
+
+        wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
+            .withRequestBody(containing("resize"))
+            .willReturn(aResponse().withStatus(202)));
+
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/srv-01"))
+            .inScenario("ResizeScenario")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"server\": {\"id\": \"srv-01\", \"name\": \"prod-app-01\", \"status\": \"VERIFY_RESIZE\"}}"))
+            .willSetStateTo("VERIFY_RESIZE_REACHED"));
+
+        wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
+            .withRequestBody(equalToJson("{\"confirmResize\": null}"))
+            .willReturn(aResponse().withStatus(204)));
+
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/srv-01"))
+            .inScenario("ResizeScenario")
+            .whenScenarioStateIs("VERIFY_RESIZE_REACHED")
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"server\": {\"id\": \"srv-01\", \"name\": \"prod-app-01\", \"status\": \"ACTIVE\"}}")));
+
+        var runContext = runContextFactory.of();
+
+        var task = UpdateServer.builder()
+            .id("update_resize_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("srv-01"))
+            .flavorRef(Property.ofValue("flv-large"))
+            .autoConfirmResize(Property.ofValue(true))
+            .timeout(Property.ofValue(Duration.ofSeconds(5)))
+            .build();
+
+        var output = task.run(runContext);
+        assertNotNull(output);
+        assertThat(output.getServerId(), is("srv-01"));
+        assertThat(output.getStatus(), is("ACTIVE"));
+    }
+
+    @Test
+    void testUpdateServerWithMetadataAndInterface() throws Exception {
+        wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/metadata"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"metadata\": {\"tier\": \"frontend\"}}")));
+
+        wireMockServer.stubFor(get(urlPathEqualTo("/network/v2.0/networks"))
+            .withQueryParam("name", equalTo("private-net"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"networks\": [{\"id\": \"net-uuid-priv\", \"name\": \"private-net\"}]}")));
+
+        wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/os-interface"))
+            .withRequestBody(containing("net-uuid-priv"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"interfaceAttachment\": {\"net_id\": \"net-uuid-priv\", \"port_id\": \"port-111\"}}")));
+
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/srv-01"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"server\": {\"id\": \"srv-01\", \"name\": \"prod-app-01\", \"status\": \"ACTIVE\"}}")));
+
+        var runContext = runContextFactory.of();
+
+        var task = UpdateServer.builder()
+            .id("update_meta_net_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("srv-01"))
+            .metadata(Property.ofValue(Map.of("tier", "frontend")))
+            .networkId(Property.ofValue("private-net"))
+            .build();
+
+        var output = task.run(runContext);
+        assertNotNull(output);
+        assertThat(output.getServerId(), is("srv-01"));
+    }
+
+    @Test
+    void testListServersMultiPagePagination() throws Exception {
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/detail?limit=1"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "servers": [
+                        {
+                          "id": "srv-page-1",
+                          "name": "worker-p1",
+                          "status": "ACTIVE"
+                        }
+                      ]
+                    }
+                    """)));
+
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/detail"))
+            .withQueryParam("limit", equalTo("1"))
+            .withQueryParam("marker", equalTo("srv-page-1"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "servers": [
+                        {
+                          "id": "srv-page-2",
+                          "name": "worker-p2",
+                          "status": "ACTIVE"
+                        }
+                      ]
+                    }
+                    """)));
+
+        var runContext = runContextFactory.of();
+
+        var task = ListServers.builder()
+            .id("list_paging_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .limit(Property.ofValue(2))
+            .pageSize(Property.ofValue(1))
+            .build();
+
+        var output = task.run(runContext);
+        assertNotNull(output);
+        assertThat(output.getSize(), is(2));
+        assertThat(output.getServers().getFirst().getId(), is("srv-page-1"));
+        assertThat(output.getServers().getLast().getId(), is("srv-page-2"));
+    }
+
+    @Test
+    void testFlavorAmbiguousAndNotFound() {
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/detail"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "flavors": [
+                        {"id": "flv-1", "name": "m1.ambiguous"},
+                        {"id": "flv-2", "name": "m1.ambiguous"}
+                      ]
+                    }
+                    """)));
+
+        var runContext = runContextFactory.of();
+
+        var taskAmbiguous = CreateServer.builder()
+            .id("ambiguous_flavor_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .name(Property.ofValue("test-vm"))
+            .flavorRef(Property.ofValue("m1.ambiguous"))
+            .build();
+
+        var exAmb = assertThrows(IllegalArgumentException.class, () -> taskAmbiguous.run(runContext));
+        assertThat(exAmb.getMessage(), containsString("Ambiguous OpenStack flavor"));
+
+        var taskNotFound = CreateServer.builder()
+            .id("not_found_flavor_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .name(Property.ofValue("test-vm"))
+            .flavorRef(Property.ofValue("m1.nonexistent"))
+            .build();
+
+        var exNf = assertThrows(IllegalArgumentException.class, () -> taskNotFound.run(runContext));
+        assertThat(exNf.getMessage(), containsString("OpenStack flavor not found"));
+    }
+
+    @Test
+    void testNetworkAmbiguousAndNotFound() {
+        wireMockServer.stubFor(get(urlPathEqualTo("/network/v2.0/networks"))
+            .withQueryParam("name", equalTo("duplicate-net"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "networks": [
+                        {"id": "net-1", "name": "duplicate-net"},
+                        {"id": "net-2", "name": "duplicate-net"}
+                      ]
+                    }
+                    """)));
+
+        var runContext = runContextFactory.of();
+
+        var taskAmbiguous = UpdateServer.builder()
+            .id("ambiguous_net_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("srv-01"))
+            .networkId(Property.ofValue("duplicate-net"))
+            .build();
+
+        var exAmb = assertThrows(IllegalArgumentException.class, () -> taskAmbiguous.run(runContext));
+        assertThat(exAmb.getMessage(), containsString("Ambiguous OpenStack network"));
+
+        wireMockServer.stubFor(get(urlPathEqualTo("/network/v2.0/networks"))
+            .withQueryParam("name", equalTo("nonexistent-net"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"networks\": []}")));
+
+        wireMockServer.stubFor(get(urlPathEqualTo("/network/v2.0/networks"))
+            .withQueryParam("id", equalTo("nonexistent-net"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"networks\": []}")));
+
+        var taskNotFound = UpdateServer.builder()
+            .id("not_found_net_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("srv-01"))
+            .networkId(Property.ofValue("nonexistent-net"))
+            .build();
+
+        var exNf = assertThrows(IllegalArgumentException.class, () -> taskNotFound.run(runContext));
+        assertThat(exNf.getMessage(), containsString("OpenStack network not found"));
     }
 }

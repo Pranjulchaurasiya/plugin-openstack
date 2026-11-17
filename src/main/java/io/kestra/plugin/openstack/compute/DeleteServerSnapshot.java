@@ -8,7 +8,11 @@ import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
-import lombok.*;
+import lombok.Builder;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
 @SuperBuilder
@@ -17,27 +21,27 @@ import lombok.experimental.SuperBuilder;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Delete an OpenStack server snapshot image",
+    title = "Delete an OpenStack server snapshot",
     description = """
-        Permanently deletes a snapshot image from the OpenStack Glance image registry. Equivalent to VMware `DeleteVmSnapshot`.
+        Deletes a Glance snapshot image previously created from an OpenStack Nova compute server instance.
         """
 )
 @Plugin(
     examples = {
         @Example(
-            title = "Delete a snapshot image",
+            title = "Delete a server snapshot image",
             full = true,
             code = """
-                id: delete_snapshot
+                id: delete_openstack_snapshot
                 namespace: company.team
 
                 tasks:
-                  - id: delete_image
+                  - id: delete_snapshot
                     type: io.kestra.plugin.openstack.compute.DeleteServerSnapshot
                     authUrl: "https://keystone.company.local:5000/v3"
                     applicationCredentialId: "{{ secret('OPENSTACK_APP_CREDENTIAL_ID') }}"
                     applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
-                    imageId: "da3052bf-1a52-472e-8c38-ceb5c1fb9811"
+                    imageId: "4f7a2b91-9e23-4412-a4f6-8bb819c94723"
                 """
         )
     }
@@ -46,9 +50,9 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
 
     @NotNull
     @Schema(
-        title = "Glance image UUID",
+        title = "Snapshot image UUID or name",
         description = """
-            The unique identifier of the snapshot image to delete.
+            The unique identifier or name of the snapshot image to delete.
             """
     )
     @PluginProperty(group = "main")
@@ -63,11 +67,12 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
         logger.info("Deleting Glance snapshot image '{}'...", rImageId);
 
         try (var client = this.createClient(runContext)) {
-            client.deleteSnapshot(rImageId);
-            logger.info("Successfully deleted snapshot image '{}'.", rImageId);
+            var targetImageId = client.resolveImageId(rImageId);
+            client.deleteSnapshot(targetImageId);
+            logger.info("Successfully deleted snapshot image '{}'.", targetImageId);
 
             return Output.builder()
-                .imageId(rImageId)
+                .deleted(true)
                 .build();
         }
     }
@@ -76,11 +81,11 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Deleted image UUID",
+            title = "Deletion success",
             description = """
-                The UUID of the deleted snapshot image.
+                Whether the snapshot image was successfully deleted.
                 """
         )
-        private final String imageId;
+        private final Boolean deleted;
     }
 }

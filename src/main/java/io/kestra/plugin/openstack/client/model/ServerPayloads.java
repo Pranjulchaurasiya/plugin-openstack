@@ -44,7 +44,7 @@ public class ServerPayloads {
         private String imageRef;
 
         @JsonProperty("networks")
-        private List<NetworkRef> networks;
+        private Object networks;
 
         @JsonProperty("key_name")
         private String keyName;

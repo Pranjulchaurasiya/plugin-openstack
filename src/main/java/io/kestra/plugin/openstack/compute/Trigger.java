@@ -12,24 +12,23 @@ import io.kestra.core.models.triggers.PollingTriggerInterface;
 import io.kestra.core.models.triggers.TriggerContext;
 import io.kestra.core.models.triggers.TriggerOutput;
 import io.kestra.core.models.triggers.TriggerService;
-import io.kestra.core.runners.RunContext;
 import io.kestra.core.storages.kv.KVMetadata;
 import io.kestra.core.storages.kv.KVValueAndMetadata;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.SafeRegex;
 import io.kestra.plugin.openstack.client.model.EndpointType;
 import io.kestra.plugin.openstack.client.model.EventType;
+import io.kestra.plugin.openstack.client.model.InstanceActionResponses;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Pattern;
 
 @SuperBuilder
 @ToString
@@ -45,48 +44,37 @@ import java.util.regex.Pattern;
 @Plugin(
     examples = {
         @Example(
-            title = "Trigger when a server is stopped",
+            title = "Trigger a flow whenever an active OpenStack worker shuts down or stops",
             full = true,
             code = """
-                id: on_server_stopped
-                namespace: company.team
+                id: handle_server_stop_events
+                namespace: company.openstack
 
                 triggers:
-                  - id: watch
+                  - id: watch_server_stops
                     type: io.kestra.plugin.openstack.compute.Trigger
-                    authUrl: "https://keystone.company.local:5000/v3"
-                    applicationCredentialId: "{{ secret('OPENSTACK_APP_CREDENTIAL_ID') }}"
-                    applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
-                    status: "SHUTOFF"
-                    serverNameRegex: "prod-.*"
+                    authUrl: "https://keystone.example.com:5000/v3"
+                    applicationCredentialId: "{{ secret('OPENSTACK_APP_CRED_ID') }}"
+                    applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CRED_SECRET') }}"
                     eventType: STOP
+                    serverNameRegex: "^kestra-worker-.*"
                     interval: PT1M
 
                 tasks:
-                  - id: log
+                  - id: log_event
                     type: io.kestra.plugin.core.log.Log
-                    message: "Detected {{ trigger.size }} server event(s)."
+                    message: "Detected {{ trigger.size }} OpenStack server event(s): {{ trigger.events }}"
                 """
         )
     }
 )
 public class Trigger extends AbstractTrigger implements PollingTriggerInterface, TriggerOutput<Trigger.Output>, OpenStackConnectionInterface {
 
-    @Builder.Default
-    @Schema(
-        title = "Polling interval",
-        description = """
-            The duration between consecutive polling cycles. Defaults to `PT1M` (1 minute).
-            """
-    )
-    @PluginProperty(group = "main")
-    private Duration interval = Duration.ofMinutes(1);
-
     @NotNull
     @Schema(
-        title = "Keystone authentication URL",
+        title = "Keystone Auth URL",
         description = """
-            The Identity service endpoint URL for authentication, e.g. `https://keystone.example.com:5000/v3`.
+            Identity v3 auth URL, e.g. `https://keystone.example.com:5000/v3`.
             """
     )
     @PluginProperty(group = "connection")
@@ -95,66 +83,52 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Schema(
         title = "Application Credential ID",
         description = """
-            The OpenStack Keystone Application Credential ID for authentication.
+            Identity v3 Application Credential ID.
             """
     )
-    @PluginProperty(group = "connection")
+    @PluginProperty(group = "connection", secret = true)
     private Property<String> applicationCredentialId;
 
     @Schema(
         title = "Application Credential Secret",
         description = """
-            The OpenStack Keystone Application Credential Secret for authentication.
+            Identity v3 Application Credential Secret.
             """
     )
     @PluginProperty(group = "connection", secret = true)
-    @ToString.Exclude
-    @EqualsAndHashCode.Exclude
     private Property<String> applicationCredentialSecret;
 
     @Schema(
-        title = "OpenStack username",
+        title = "Username",
         description = """
-            The username for OpenStack password-based authentication.
+            Keystone user name for password-based authentication.
             """
     )
     @PluginProperty(group = "connection")
     private Property<String> username;
 
     @Schema(
-        title = "OpenStack password",
+        title = "Password",
         description = """
-            The password for OpenStack password-based authentication.
+            Keystone user password for password-based authentication.
             """
     )
     @PluginProperty(group = "connection", secret = true)
-    @ToString.Exclude
-    @EqualsAndHashCode.Exclude
     private Property<String> password;
 
     @Schema(
-        title = "Target project name",
+        title = "Project Name",
         description = """
-            The OpenStack project/tenant name to scope authentication to when using password credentials.
+            Project / tenant name for scoping token credentials.
             """
     )
     @PluginProperty(group = "connection")
     private Property<String> projectName;
 
     @Schema(
-        title = "User domain name",
+        title = "Project Domain Name",
         description = """
-            The domain name for the user when using password credentials. Defaults to `Default`.
-            """
-    )
-    @PluginProperty(group = "connection")
-    @Builder.Default
-    private Property<String> userDomainName = Property.ofValue("Default");
-
-    @Schema(
-        title = "Project domain name",
-        description = """
-            The domain name for the project when using password credentials. Defaults to `Default`.
+            Domain name where project resides (defaults to `Default`).
             """
     )
     @PluginProperty(group = "connection")
@@ -162,18 +136,28 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     private Property<String> projectDomainName = Property.ofValue("Default");
 
     @Schema(
-        title = "Region name",
+        title = "User Domain Name",
         description = """
-            The OpenStack region to target in the service catalog (e.g. `RegionOne`).
+            Domain name where user resides (defaults to `Default`).
+            """
+    )
+    @PluginProperty(group = "connection")
+    @Builder.Default
+    private Property<String> userDomainName = Property.ofValue("Default");
+
+    @Schema(
+        title = "Region",
+        description = """
+            OpenStack region name (e.g. `RegionOne`).
             """
     )
     @PluginProperty(group = "connection")
     private Property<String> region;
 
     @Schema(
-        title = "Endpoint interface type",
+        title = "Keystone Endpoint Type",
         description = """
-            The endpoint interface type to resolve from the service catalog: `PUBLIC`, `INTERNAL`, or `ADMIN`. Defaults to `PUBLIC`.
+            Catalog interface type (`public`, `internal`, `admin`). Defaults to `public`.
             """
     )
     @PluginProperty(group = "connection")
@@ -181,18 +165,28 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     private Property<EndpointType> endpointType = Property.ofValue(EndpointType.PUBLIC);
 
     @Schema(
-        title = "HTTP client options",
+        title = "HTTP Client Options",
         description = """
-            Advanced HTTP client configuration such as timeouts and proxy settings.
+            Advanced HTTP connection configuration options.
             """
     )
     @PluginProperty(group = "connection")
     private HttpConfiguration options;
 
     @Schema(
-        title = "Status filter",
+        title = "Trigger polling interval",
         description = """
-            Only match servers in this specific status (e.g. `SHUTOFF`, `ACTIVE`, `ERROR`).
+            Interval between consecutive polls to OpenStack Nova. Defaults to 1 minute (`PT1M`).
+            """
+    )
+    @PluginProperty(group = "main")
+    @Builder.Default
+    private Property<Duration> interval = Property.ofValue(Duration.ofMinutes(1));
+
+    @Schema(
+        title = "Server status filter",
+        description = """
+            Optional server power state filter (`ACTIVE`, `SHUTOFF`, `PAUSED`, `ERROR`).
             """
     )
     @PluginProperty(group = "main")
@@ -201,7 +195,7 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Schema(
         title = "Server name regex filter",
         description = """
-            Optional regular expression to filter server names.
+            Client-side regex filter applied against server names before triggering.
             """
     )
     @PluginProperty(group = "main")
@@ -210,7 +204,7 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Schema(
         title = "Event type filter",
         description = """
-            Filter for specific server lifecycle events (e.g. `ALL`, `START`, `STOP`, `REBOOT`, `DELETE`). Defaults to `ALL`.
+            Filter for specific server lifecycle events (`ALL`, `CREATE`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`). Defaults to `ALL`.
             """
     )
     @PluginProperty(group = "main")
@@ -220,12 +214,12 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Schema(
         title = "Max events per poll",
         description = """
-            Maximum number of server events to emit in a single trigger execution. Defaults to 100.
+            Maximum number of server events to emit in a single trigger execution. Must be between 1 and 500. Defaults to 50.
             """
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<Integer> maxEvents = Property.ofValue(100);
+    private Property<@Min(1) @Max(500) Integer> maxEvents = Property.ofValue(50);
 
     @Override
     public Optional<Execution> evaluate(ConditionContext conditionContext, TriggerContext context) throws Exception {
@@ -235,28 +229,39 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
         var rStatus = runContext.render(this.status).as(String.class).orElse(null);
         var rNameRegex = runContext.render(this.serverNameRegex).as(String.class).orElse(null);
         var rEventType = runContext.render(this.eventType).as(EventType.class).orElse(EventType.ALL);
-        var rMaxEvents = runContext.render(this.maxEvents).as(Integer.class).orElse(100);
+        var rMaxEvents = runContext.render(this.maxEvents).as(Integer.class).orElse(50);
 
-        var kvKey = ("watermark_" + conditionContext.getFlow().getId() + "_" + this.getId()).replaceAll("[^a-zA-Z0-9_.-]", "_");
+        var flowId = conditionContext.getFlow().getId();
+        var triggerId = this.getId();
+        var kvKey = ("wm_" + flowId.length() + "_" + flowId + "_" + triggerId.length() + "_" + triggerId)
+            .replaceAll("[^a-zA-Z0-9_.-]", "_");
         var kvStore = runContext.namespaceKv(conditionContext.getFlow().getNamespace());
 
-        String watermark = null;
+        String rawWatermark = null;
         try {
             var valOpt = kvStore.getValue(kvKey);
             if (valOpt.isPresent() && valOpt.get().value() != null) {
-                watermark = valOpt.get().value().toString();
+                rawWatermark = valOpt.get().value().toString();
             }
         } catch (Exception e) {
             logger.debug("No previous watermark found in KV Store for key '{}': {}", kvKey, e.getMessage());
         }
 
-        if (watermark == null && context.getDate() != null) {
-            watermark = context.getDate().format(DateTimeFormatter.ISO_INSTANT);
+        String watermarkTimestamp = null;
+        var deliveredIds = new HashSet<String>();
+        if (rawWatermark != null && !rawWatermark.isBlank()) {
+            var parts = rawWatermark.split("\\|", 2);
+            watermarkTimestamp = parts[0];
+            if (parts.length > 1 && !parts[1].isBlank()) {
+                deliveredIds.addAll(Arrays.asList(parts[1].split(",")));
+            }
+        } else if (context.getDate() != null) {
+            watermarkTimestamp = context.getDate().format(DateTimeFormatter.ISO_INSTANT);
         }
 
         var queryParams = new HashMap<String, String>();
-        if (watermark != null) {
-            queryParams.put("changes-since", watermark);
+        if (watermarkTimestamp != null) {
+            queryParams.put("changes-since", watermarkTimestamp);
         }
         if (rStatus != null) {
             queryParams.put("status", rStatus);
@@ -277,18 +282,24 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
             }
 
             var events = new ArrayList<ServerEvent>();
-            String latestTimestamp = watermark;
+            var newDeliveredIds = new HashSet<>(deliveredIds);
+            String latestTimestamp = watermarkTimestamp;
 
             for (var srv : servers) {
                 if (events.size() >= rMaxEvents) {
                     break;
                 }
 
-                // Check instance actions for specific event detection
-                List<io.kestra.plugin.openstack.client.model.InstanceActionResponses.InstanceAction> actions = Collections.emptyList();
+                var actions = Collections.<InstanceActionResponses.InstanceAction>emptyList();
                 try {
-                    actions = client.listInstanceActions(srv.getId(), watermark);
-                } catch (Exception ignored) {
+                    actions = client.listInstanceActions(srv.getId(), watermarkTimestamp);
+                } catch (IllegalStateException e) {
+                    if (e.getMessage() != null && e.getMessage().contains("microversion")) {
+                        throw e;
+                    }
+                    logger.warn("Failed to fetch instance actions for server '{}': {}", srv.getId(), e.getMessage());
+                } catch (Exception e) {
+                    logger.warn("Failed to fetch instance actions for server '{}': {}", srv.getId(), e.getMessage());
                 }
 
                 if (!actions.isEmpty()) {
@@ -296,6 +307,14 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                         if (events.size() >= rMaxEvents) {
                             break;
                         }
+                        var eventId = act.getRequestId() != null
+                            ? act.getRequestId()
+                            : (srv.getId() + "_" + act.getAction() + "_" + act.getStartTime());
+
+                        if (deliveredIds.contains(eventId)) {
+                            continue;
+                        }
+
                         if (matchesEvent(act.getAction(), rEventType)) {
                             events.add(ServerEvent.builder()
                                 .serverId(srv.getId())
@@ -304,34 +323,45 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                                 .requestId(act.getRequestId())
                                 .timestamp(act.getStartTime() != null ? act.getStartTime() : srv.getUpdated())
                                 .build());
+                            newDeliveredIds.add(eventId);
                         }
                     }
                 } else {
-                    // Fallback to server state change event
-                    var eventName = srv.getStatus() != null ? srv.getStatus() : "UPDATE";
-                    if (rEventType == EventType.ALL || matchesStatusEvent(srv.getStatus(), rEventType)) {
-                        events.add(ServerEvent.builder()
-                            .serverId(srv.getId())
-                            .serverName(srv.getName())
-                            .eventType(eventName)
-                            .requestId(null)
-                            .timestamp(srv.getUpdated())
-                            .build());
+                    var eventId = srv.getId() + "_" + (srv.getUpdated() != null ? srv.getUpdated() : srv.getStatus());
+                    if (!deliveredIds.contains(eventId)) {
+                        var eventName = srv.getStatus() != null ? srv.getStatus() : "UPDATE";
+                        if (rEventType == EventType.ALL || matchesStatusEvent(srv.getStatus(), rEventType)) {
+                            events.add(ServerEvent.builder()
+                                .serverId(srv.getId())
+                                .serverName(srv.getName())
+                                .eventType(eventName)
+                                .requestId(null)
+                                .timestamp(srv.getUpdated())
+                                .build());
+                            newDeliveredIds.add(eventId);
+                        }
                     }
                 }
 
                 if (srv.getUpdated() != null && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
                     latestTimestamp = srv.getUpdated();
+                    newDeliveredIds.clear();
+                    for (var ev : events) {
+                        var id = ev.getRequestId() != null ? ev.getRequestId() : (ev.getServerId() + "_" + ev.getEventType());
+                        newDeliveredIds.add(id);
+                    }
                 }
             }
 
-            // Advance watermark if events detected or timestamp moved forward
-            if (latestTimestamp != null && !latestTimestamp.equals(watermark)) {
-                try {
-                    kvStore.put(kvKey, new KVValueAndMetadata(new KVMetadata(null, (Duration) null), latestTimestamp));
-                    logger.debug("Updated OpenStack trigger watermark to '{}'.", latestTimestamp);
-                } catch (Exception e) {
-                    logger.warn("Failed to persist watermark '{}' in KV store: {}", latestTimestamp, e.getMessage());
+            if (latestTimestamp != null) {
+                var newWatermarkValue = latestTimestamp + "|" + String.join(",", newDeliveredIds);
+                if (!newWatermarkValue.equals(rawWatermark)) {
+                    try {
+                        kvStore.put(kvKey, new KVValueAndMetadata(new KVMetadata(null, (Duration) null), newWatermarkValue));
+                        logger.debug("Updated OpenStack trigger watermark to '{}'.", newWatermarkValue);
+                    } catch (Exception e) {
+                        logger.warn("Failed to persist watermark '{}' in KV store: {}", newWatermarkValue, e.getMessage());
+                    }
                 }
             }
 
@@ -375,22 +405,46 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
         if (filter == EventType.ALL || status == null) {
             return true;
         }
-        var st = status.toUpperCase(Locale.ROOT);
+        var stat = status.toUpperCase(Locale.ROOT);
         return switch (filter) {
-            case START -> "ACTIVE".equals(st);
-            case STOP -> "SHUTOFF".equals(st);
-            case PAUSE -> "PAUSED".equals(st);
-            case SUSPEND -> "SUSPENDED".equals(st);
-            case DELETE -> "DELETED".equals(st);
+            case START, RESUME -> "ACTIVE".equals(stat);
+            case STOP -> "SHUTOFF".equals(stat);
+            case PAUSE -> "PAUSED".equals(stat);
+            case SUSPEND -> "SUSPENDED".equals(stat);
+            case RESIZE -> stat.contains("RESIZE");
+            case REBUILD -> stat.contains("REBUILD");
             default -> false;
         };
+    }
+
+    @Override
+    public Duration getInterval() {
+        return null;
+    }
+
+    @Getter
+    @Builder
+    public static class Output implements io.kestra.core.models.tasks.Output {
+        @Schema(
+            title = "Server events",
+            description = """
+                List of detected lifecycle events for matching compute instances.
+                """
+        )
+        private final List<ServerEvent> events;
+
+        @Schema(
+            title = "Events count",
+            description = """
+                The number of events detected in this evaluation.
+                """
+        )
+        private final int size;
     }
 
     @Getter
     @Builder
     @ToString
-    @NoArgsConstructor
-    @AllArgsConstructor
     public static class ServerEvent {
         @Schema(
             title = "Server UUID",
@@ -398,58 +452,38 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                 The unique identifier of the server.
                 """
         )
-        private String serverId;
+        private final String serverId;
 
         @Schema(
-            title = "Server Name",
+            title = "Server name",
             description = """
-                Human-readable name of the server instance.
+                The name of the server.
                 """
         )
-        private String serverName;
+        private final String serverName;
 
         @Schema(
-            title = "Event Type",
+            title = "Event type",
             description = """
-                The event or action name triggered (e.g. start, stop, reboot, SHUTOFF).
+                The action or status event type (e.g. `create`, `stop`, `start`, `reboot`).
                 """
         )
-        private String eventType;
+        private final String eventType;
 
         @Schema(
-            title = "Action Request ID",
+            title = "Request ID",
             description = """
-                Unique request ID of the instance action in Nova, if available.
+                The Nova request UUID associated with this instance action, if available.
                 """
         )
-        private String requestId;
+        private final String requestId;
 
         @Schema(
-            title = "Event Timestamp",
+            title = "Event timestamp",
             description = """
-                ISO 8601 timestamp of when the event occurred.
+                Timestamp when the event occurred.
                 """
         )
-        private String timestamp;
-    }
-
-    @Getter
-    @Builder
-    public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(
-            title = "Detected server events",
-            description = """
-                List of compact server lifecycle events that triggered the execution.
-                """
-        )
-        private final List<ServerEvent> events;
-
-        @Schema(
-            title = "Event count",
-            description = """
-                The number of server events detected.
-                """
-        )
-        private final int size;
+        private final String timestamp;
     }
 }

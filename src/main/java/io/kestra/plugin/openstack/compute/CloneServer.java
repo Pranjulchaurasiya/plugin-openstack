@@ -6,7 +6,6 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.model.Server;
 import io.kestra.plugin.openstack.client.model.ServerPayloads;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
@@ -31,20 +30,21 @@ import java.util.List;
 @Plugin(
     examples = {
         @Example(
-            title = "Clone a production server for dev/test",
+            title = "Clone an existing server instance and delete intermediate snapshot",
             full = true,
             code = """
-                id: clone_server
+                id: clone_openstack_vm
                 namespace: company.team
 
                 tasks:
-                  - id: clone
+                  - id: clone_server
                     type: io.kestra.plugin.openstack.compute.CloneServer
                     authUrl: "https://keystone.company.local:5000/v3"
                     applicationCredentialId: "{{ secret('OPENSTACK_APP_CREDENTIAL_ID') }}"
                     applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
                     sourceServerId: "9a2f6dc1-b1e8-45d2-a745-cfa098650392"
                     name: "kestra-worker-clone-01"
+                    deleteSnapshotAfterClone: true
                 """
         )
     }
@@ -55,7 +55,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
     @Schema(
         title = "Source server UUID",
         description = """
-            The unique identifier of the existing server to clone.
+            The unique identifier of the source server to clone.
             """
     )
     @PluginProperty(group = "main")
@@ -65,43 +65,43 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
     @Schema(
         title = "Cloned server name",
         description = """
-            The name to assign to the new cloned server instance.
+            Name for the new server instance cloned from the snapshot.
             """
     )
     @PluginProperty(group = "main")
     private Property<String> name;
 
     @Schema(
-        title = "Flavor reference or ID",
+        title = "Target flavor reference or ID",
         description = """
-            Optional flavor ID or name for the cloned server. If omitted, uses the source server's flavor ID.
+            Flavor UUID or name for the cloned server. Defaults to the flavor of the source server.
             """
     )
-    @PluginProperty(group = "main")
+    @PluginProperty(group = "advanced")
     private Property<String> flavorRef;
 
     @Schema(
-        title = "Network attachments",
+        title = "Snapshot name",
         description = """
-            Optional network attachments for the cloned server.
-            """
-    )
-    @PluginProperty(group = "main")
-    private Property<List<CreateServer.NetworkAttachment>> networks;
-
-    @Schema(
-        title = "Intermediate snapshot image name",
-        description = """
-            Name to assign to the intermediate Glance snapshot. Defaults to `{name}-snapshot`.
+            Name for the intermediate snapshot image. Defaults to `<clonedServerName>-snapshot`.
             """
     )
     @PluginProperty(group = "advanced")
     private Property<String> snapshotName;
 
     @Schema(
-        title = "Delete snapshot after cloning",
+        title = "Networks to attach",
         description = """
-            Whether to automatically delete the intermediate Glance snapshot image after the clone server becomes ACTIVE. Defaults to `false`.
+            List of network interfaces or names to attach to the cloned server. Defaults to the networks of the source server.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    private Property<List<CreateServer.NetworkAttachment>> networks;
+
+    @Schema(
+        title = "Delete intermediate snapshot after cloning",
+        description = """
+            Whether to delete the intermediate Glance snapshot image once the cloned server becomes `ACTIVE`. Defaults to `false`.
             """
     )
     @PluginProperty(group = "advanced")
@@ -109,9 +109,10 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
     private Property<Boolean> deleteSnapshotAfterClone = Property.ofValue(false);
 
     @Schema(
-        title = "Timeout duration",
+        title = "Timeout for cloning lifecycle operations",
         description = """
-            Maximum duration to wait for intermediate snapshot and server provisioning. Defaults to 10 minutes.
+            Maximum time to wait for the snapshot to become active and for the cloned server to reach `ACTIVE` status.
+            Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -129,26 +130,14 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         var rSnapshotName = runContext.render(this.snapshotName).as(String.class).orElse(rName + "-snapshot");
         var rDeleteSnap = runContext.render(this.deleteSnapshotAfterClone).as(Boolean.class).orElse(false);
         var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
-
         var rNetworks = runContext.render(this.networks).asList(CreateServer.NetworkAttachment.class);
-        List<ServerPayloads.NetworkRef> networkRefs = null;
-        if (rNetworks != null && !rNetworks.isEmpty()) {
-            networkRefs = new ArrayList<>();
-            for (var net : rNetworks) {
-                networkRefs.add(ServerPayloads.NetworkRef.builder()
-                    .uuid(net.getUuid())
-                    .port(net.getPort())
-                    .fixedIp(net.getFixedIp())
-                    .tag(net.getTag())
-                    .build());
-            }
-        }
 
         logger.info("Cloning OpenStack server '{}' to new server '{}'...", rSourceServerId, rName);
 
         try (var client = this.createClient(runContext)) {
+            var sourceServer = client.getServer(rSourceServerId);
+
             if (rFlavorRef == null) {
-                var sourceServer = client.getServer(rSourceServerId);
                 if (sourceServer.getFlavor() != null && sourceServer.getFlavor().get("id") != null) {
                     rFlavorRef = sourceServer.getFlavor().get("id").toString();
                 } else {
@@ -157,6 +146,30 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
             } else {
                 rFlavorRef = client.resolveFlavorId(rFlavorRef);
             }
+
+            var networkRefs = new ArrayList<ServerPayloads.NetworkRef>();
+            if (rNetworks != null && !rNetworks.isEmpty()) {
+                for (var net : rNetworks) {
+                    var resolvedNetId = client.resolveNetworkId(net.getUuid());
+                    networkRefs.add(ServerPayloads.NetworkRef.builder()
+                        .uuid(resolvedNetId)
+                        .port(net.getPort())
+                        .fixedIp(net.getFixedIp())
+                        .tag(net.getTag())
+                        .build());
+                }
+            } else if (sourceServer.getAddresses() != null && !sourceServer.getAddresses().isEmpty()) {
+                for (var netName : sourceServer.getAddresses().keySet()) {
+                    try {
+                        var resolvedNetId = client.resolveNetworkId(netName);
+                        networkRefs.add(ServerPayloads.NetworkRef.builder().uuid(resolvedNetId).build());
+                    } catch (Exception e) {
+                        logger.warn("Could not resolve network '{}' from source server: {}", netName, e.getMessage());
+                    }
+                }
+            }
+
+            Object networksPayload = !networkRefs.isEmpty() ? networkRefs : "auto";
 
             logger.info("Creating intermediate snapshot image '{}' from server '{}'...", rSnapshotName, rSourceServerId);
             var snapshotImageId = client.createSnapshot(rSourceServerId, rSnapshotName, null);
@@ -171,7 +184,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
                     .name(rName)
                     .flavorRef(rFlavorRef)
                     .imageRef(snapshotImageId)
-                    .networks(networkRefs)
+                    .networks(networksPayload)
                     .build())
                 .build();
 
@@ -192,7 +205,6 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
             return Output.builder()
                 .serverId(clonedServer.getId())
                 .status(clonedServer.getStatus())
-                .sourceServerId(rSourceServerId)
                 .snapshotImageId(snapshotImageId)
                 .build();
         }
@@ -218,17 +230,9 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         private final String status;
 
         @Schema(
-            title = "Source server UUID",
-            description = """
-                The unique identifier of the source server that was cloned.
-                """
-        )
-        private final String sourceServerId;
-
-        @Schema(
             title = "Intermediate snapshot image UUID",
             description = """
-                The Glance image UUID of the snapshot created during the cloning process.
+                The UUID of the intermediate Glance snapshot image created during cloning.
                 """
         )
         private final String snapshotImageId;

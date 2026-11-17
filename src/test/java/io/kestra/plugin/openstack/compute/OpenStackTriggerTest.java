@@ -20,6 +20,7 @@ import java.util.Optional;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @KestraTest
@@ -126,7 +127,7 @@ class OpenStackTriggerTest {
             .status(Property.ofValue("SHUTOFF"))
             .serverNameRegex(Property.ofValue("prod-.*"))
             .eventType(Property.ofValue(EventType.STOP))
-            .interval(Duration.ofMinutes(1))
+            .interval(Property.ofValue(Duration.ofMinutes(1)))
             .build();
 
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
@@ -142,6 +143,10 @@ class OpenStackTriggerTest {
         assertThat(events.getFirst().get("serverId"), is("srv-prod-01"));
         assertThat(events.getFirst().get("eventType"), is("stop"));
         assertThat(events.getFirst().get("requestId"), is("req-stop-9988"));
+
+        // Second consecutive poll should deduplicate and return empty
+        var secondPoll = trigger.evaluate(context.getKey(), context.getValue());
+        assertTrue(secondPoll.isEmpty(), "Second consecutive poll without new events must return empty.");
     }
 
     @Test
@@ -164,5 +169,43 @@ class OpenStackTriggerTest {
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
         var executionOptional = trigger.evaluate(context.getKey(), context.getValue());
         assertTrue(executionOptional.isEmpty(), "Trigger should return empty when no servers match.");
+    }
+
+    @Test
+    void testTriggerRethrowsMicroversion406Error() {
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/detail"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "servers": [
+                        {
+                          "id": "srv-prod-02",
+                          "name": "prod-app-02",
+                          "status": "ACTIVE",
+                          "updated": "2026-11-17T10:00:00Z"
+                        }
+                      ]
+                    }
+                    """)));
+
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/srv-prod-02/os-instance-actions"))
+            .willReturn(aResponse()
+                .withStatus(406)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"computeFault\": {\"message\": \"Version 2.58 is not supported\", \"code\": 406}}")));
+
+        var trigger = Trigger.builder()
+            .id("watch_openstack_" + IdUtils.create())
+            .type(Trigger.class.getName())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-id"))
+            .applicationCredentialSecret(Property.ofValue("app-secret"))
+            .build();
+
+        var context = TestsUtils.mockTrigger(runContextFactory, trigger);
+        var ex = assertThrows(IllegalStateException.class, () -> trigger.evaluate(context.getKey(), context.getValue()));
+        assertThat(ex.getMessage(), containsString("microversion"));
     }
 }

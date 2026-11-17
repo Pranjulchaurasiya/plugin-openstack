@@ -43,6 +43,17 @@ public class FlavorResponses {
     @NoArgsConstructor
     @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class SingleFlavor {
+        @JsonProperty("flavor")
+        private Flavor flavor;
+    }
+
+    @Getter
+    @Builder
+    @ToString
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class MultipleFlavors {
         @JsonProperty("flavors")
         private List<Flavor> flavors;

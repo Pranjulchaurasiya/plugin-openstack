@@ -53,4 +53,9 @@ public class ResetServer extends AbstractServerActionTask {
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.rebootServer(serverId, "HARD");
     }
+
+    @Override
+    protected String expectedStatus() {
+        return "ACTIVE";
+    }
 }

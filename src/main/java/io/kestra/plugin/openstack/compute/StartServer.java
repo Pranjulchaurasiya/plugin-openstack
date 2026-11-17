@@ -53,4 +53,9 @@ public class StartServer extends AbstractServerActionTask {
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.startServer(serverId);
     }
+
+    @Override
+    protected String expectedStatus() {
+        return "ACTIVE";
+    }
 }

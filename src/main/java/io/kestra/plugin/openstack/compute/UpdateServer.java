@@ -13,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -91,12 +92,23 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
     @Schema(
         title = "Auto-confirm resize",
         description = """
-            Whether to automatically confirm the resize operation. Defaults to `true`.
+            Whether to automatically wait for `VERIFY_RESIZE` status and confirm the resize operation. Defaults to `true`.
             """
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<Boolean> autoConfirmResize = Property.ofValue(true);
+
+    @Schema(
+        title = "Timeout for resize operations",
+        description = """
+            Maximum time to wait for the server to reach `VERIFY_RESIZE` and then `ACTIVE`.
+            Defaults to 10 minutes (`PT10M`).
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Schema(
         title = "Server metadata",
@@ -125,6 +137,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         var rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rAutoConfirm = runContext.render(this.autoConfirmResize).as(Boolean.class).orElse(true);
+        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rNetworkId = runContext.render(this.networkId).as(String.class).orElse(null);
 
@@ -132,6 +145,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
 
         try (var client = this.createClient(runContext)) {
             Server server = null;
+
             if (rName != null || rDescription != null) {
                 var payload = ServerPayloads.Update.builder()
                     .server(ServerPayloads.UpdateData.builder()
@@ -148,8 +162,11 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
                 logger.info("Resizing server '{}' to flavor '{}'...", rServerId, targetFlavorId);
                 client.resizeServer(rServerId, targetFlavorId);
                 if (Boolean.TRUE.equals(rAutoConfirm)) {
+                    logger.info("Waiting for server '{}' to reach VERIFY_RESIZE...", rServerId);
+                    client.waitForServerStatus(rServerId, "VERIFY_RESIZE", rTimeout, runContext);
                     client.confirmResize(rServerId);
-                    logger.info("Confirmed resize for server '{}'.", rServerId);
+                    logger.info("Confirmed resize for server '{}'. Waiting for ACTIVE...", rServerId);
+                    server = client.waitForServerStatus(rServerId, "ACTIVE", rTimeout, runContext);
                 }
             }
 
@@ -190,7 +207,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         @Schema(
             title = "Server status",
             description = """
-                The current status of the server.
+                The current status of the server after the updates.
                 """
         )
         private final String status;
@@ -198,7 +215,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         @Schema(
             title = "IP addresses",
             description = """
-                Network IP addresses assigned to the server.
+                Map of network names to IP address details after interface attachment.
                 """
         )
         private final Map<String, List<Server.Address>> addresses;

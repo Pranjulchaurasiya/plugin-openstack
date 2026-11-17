@@ -53,4 +53,9 @@ public class SuspendServer extends AbstractServerActionTask {
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.suspendServer(serverId);
     }
+
+    @Override
+    protected String expectedStatus() {
+        return "SUSPENDED";
+    }
 }

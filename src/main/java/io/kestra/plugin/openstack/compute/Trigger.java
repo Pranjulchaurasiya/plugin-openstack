@@ -13,16 +13,20 @@ import io.kestra.core.models.triggers.TriggerContext;
 import io.kestra.core.models.triggers.TriggerOutput;
 import io.kestra.core.models.triggers.TriggerService;
 import io.kestra.core.runners.RunContext;
+import io.kestra.core.storages.kv.KVMetadata;
+import io.kestra.core.storages.kv.KVValueAndMetadata;
 import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.SafeRegex;
+import io.kestra.plugin.openstack.client.model.EndpointType;
+import io.kestra.plugin.openstack.client.model.EventType;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -35,7 +39,7 @@ import java.util.regex.Pattern;
 @Schema(
     title = "React to OpenStack server state changes",
     description = """
-        Periodically polls OpenStack Nova compute servers for state changes using the `changes-since` filter and fires execution when matching server events occur.
+        Periodically polls OpenStack Nova compute servers for state changes using KV Store watermarking and event filtering, dispatching execution with compact event payloads.
         """
 )
 @Plugin(
@@ -55,17 +59,18 @@ import java.util.regex.Pattern;
                     applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
                     status: "SHUTOFF"
                     serverNameRegex: "prod-.*"
+                    eventType: STOP
                     interval: PT1M
 
                 tasks:
                   - id: log
                     type: io.kestra.plugin.core.log.Log
-                    message: "Detected {{ trigger.size }} stopped server(s)."
+                    message: "Detected {{ trigger.size }} server event(s)."
                 """
         )
     }
 )
-public class Trigger extends AbstractTrigger implements PollingTriggerInterface, TriggerOutput<Trigger.Output> {
+public class Trigger extends AbstractTrigger implements PollingTriggerInterface, TriggerOutput<Trigger.Output>, OpenStackConnectionInterface {
 
     @Builder.Default
     @Schema(
@@ -168,12 +173,12 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Schema(
         title = "Endpoint interface type",
         description = """
-            The endpoint interface type to resolve from the service catalog: `public`, `internal`, or `admin`. Defaults to `public`.
+            The endpoint interface type to resolve from the service catalog: `PUBLIC`, `INTERNAL`, or `ADMIN`. Defaults to `PUBLIC`.
             """
     )
     @PluginProperty(group = "connection")
     @Builder.Default
-    private Property<String> endpointType = Property.ofValue("public");
+    private Property<EndpointType> endpointType = Property.ofValue(EndpointType.PUBLIC);
 
     @Schema(
         title = "HTTP client options",
@@ -202,32 +207,68 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @PluginProperty(group = "main")
     private Property<String> serverNameRegex;
 
+    @Schema(
+        title = "Event type filter",
+        description = """
+            Filter for specific server lifecycle events (e.g. `ALL`, `START`, `STOP`, `REBOOT`, `DELETE`). Defaults to `ALL`.
+            """
+    )
+    @PluginProperty(group = "main")
+    @Builder.Default
+    private Property<EventType> eventType = Property.ofValue(EventType.ALL);
+
+    @Schema(
+        title = "Max events per poll",
+        description = """
+            Maximum number of server events to emit in a single trigger execution. Defaults to 100.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<Integer> maxEvents = Property.ofValue(100);
+
     @Override
     public Optional<Execution> evaluate(ConditionContext conditionContext, TriggerContext context) throws Exception {
-        RunContext runContext = conditionContext.getRunContext();
-        Logger logger = runContext.logger();
+        var runContext = conditionContext.getRunContext();
+        var logger = runContext.logger();
 
-        Map<String, String> queryParams = new HashMap<>();
+        var rStatus = runContext.render(this.status).as(String.class).orElse(null);
+        var rNameRegex = runContext.render(this.serverNameRegex).as(String.class).orElse(null);
+        var rEventType = runContext.render(this.eventType).as(EventType.class).orElse(EventType.ALL);
+        var rMaxEvents = runContext.render(this.maxEvents).as(Integer.class).orElse(100);
 
-        if (context.getDate() != null) {
-            String isoSince = context.getDate().format(DateTimeFormatter.ISO_INSTANT);
-            queryParams.put("changes-since", isoSince);
+        var kvKey = ("watermark_" + conditionContext.getFlow().getId() + "_" + this.getId()).replaceAll("[^a-zA-Z0-9_.-]", "_");
+        var kvStore = runContext.namespaceKv(conditionContext.getFlow().getNamespace());
+
+        String watermark = null;
+        try {
+            var valOpt = kvStore.getValue(kvKey);
+            if (valOpt.isPresent() && valOpt.get().value() != null) {
+                watermark = valOpt.get().value().toString();
+            }
+        } catch (Exception e) {
+            logger.debug("No previous watermark found in KV Store for key '{}': {}", kvKey, e.getMessage());
         }
 
-        String rStatus = runContext.render(this.status).as(String.class).orElse(null);
+        if (watermark == null && context.getDate() != null) {
+            watermark = context.getDate().format(DateTimeFormatter.ISO_INSTANT);
+        }
+
+        var queryParams = new HashMap<String, String>();
+        if (watermark != null) {
+            queryParams.put("changes-since", watermark);
+        }
         if (rStatus != null) {
             queryParams.put("status", rStatus);
         }
 
-        String rNameRegex = runContext.render(this.serverNameRegex).as(String.class).orElse(null);
-
-        try (OpenStackClient client = createClient(runContext)) {
-            List<Server> servers = client.listServers(queryParams);
+        try (var client = OpenStackConnectionInterface.createClient(this, runContext)) {
+            var servers = client.listServers(queryParams);
 
             if (rNameRegex != null && !rNameRegex.isBlank()) {
-                Pattern pattern = SafeRegex.compile(rNameRegex);
-                List<Server> filtered = new ArrayList<>();
-                for (Server s : servers) {
+                var pattern = SafeRegex.compile(rNameRegex);
+                var filtered = new ArrayList<Server>();
+                for (var s : servers) {
                     if (s.getName() != null && SafeRegex.matches(pattern, s.getName())) {
                         filtered.add(s);
                     }
@@ -235,52 +276,176 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                 servers = filtered;
             }
 
-            if (servers.isEmpty()) {
+            var events = new ArrayList<ServerEvent>();
+            String latestTimestamp = watermark;
+
+            for (var srv : servers) {
+                if (events.size() >= rMaxEvents) {
+                    break;
+                }
+
+                // Check instance actions for specific event detection
+                List<io.kestra.plugin.openstack.client.model.InstanceActionResponses.InstanceAction> actions = Collections.emptyList();
+                try {
+                    actions = client.listInstanceActions(srv.getId(), watermark);
+                } catch (Exception ignored) {
+                }
+
+                if (!actions.isEmpty()) {
+                    for (var act : actions) {
+                        if (events.size() >= rMaxEvents) {
+                            break;
+                        }
+                        if (matchesEvent(act.getAction(), rEventType)) {
+                            events.add(ServerEvent.builder()
+                                .serverId(srv.getId())
+                                .serverName(srv.getName())
+                                .eventType(act.getAction())
+                                .requestId(act.getRequestId())
+                                .timestamp(act.getStartTime() != null ? act.getStartTime() : srv.getUpdated())
+                                .build());
+                        }
+                    }
+                } else {
+                    // Fallback to server state change event
+                    var eventName = srv.getStatus() != null ? srv.getStatus() : "UPDATE";
+                    if (rEventType == EventType.ALL || matchesStatusEvent(srv.getStatus(), rEventType)) {
+                        events.add(ServerEvent.builder()
+                            .serverId(srv.getId())
+                            .serverName(srv.getName())
+                            .eventType(eventName)
+                            .requestId(null)
+                            .timestamp(srv.getUpdated())
+                            .build());
+                    }
+                }
+
+                if (srv.getUpdated() != null && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
+                    latestTimestamp = srv.getUpdated();
+                }
+            }
+
+            // Advance watermark if events detected or timestamp moved forward
+            if (latestTimestamp != null && !latestTimestamp.equals(watermark)) {
+                try {
+                    kvStore.put(kvKey, new KVValueAndMetadata(new KVMetadata(null, (Duration) null), latestTimestamp));
+                    logger.debug("Updated OpenStack trigger watermark to '{}'.", latestTimestamp);
+                } catch (Exception e) {
+                    logger.warn("Failed to persist watermark '{}' in KV store: {}", latestTimestamp, e.getMessage());
+                }
+            }
+
+            if (events.isEmpty()) {
                 return Optional.empty();
             }
 
-            logger.info("OpenStack trigger detected {} matching server event(s).", servers.size());
+            logger.info("OpenStack trigger detected {} matching server event(s).", events.size());
 
-            Output output = Output.builder()
-                .servers(servers)
-                .size(servers.size())
+            var output = Output.builder()
+                .events(events)
+                .size(events.size())
                 .build();
 
-            Execution execution = TriggerService.generateExecution(this, conditionContext, context, output);
+            var execution = TriggerService.generateExecution(this, conditionContext, context, output);
             return Optional.of(execution);
         }
     }
 
-    protected OpenStackClient createClient(RunContext runContext) throws Exception {
-        return OpenStackClient.builder()
-            .runContext(runContext)
-            .httpConfiguration(this.options)
-            .authUrl(runContext.render(this.authUrl).as(String.class).orElse(null))
-            .applicationCredentialId(runContext.render(this.applicationCredentialId).as(String.class).orElse(null))
-            .applicationCredentialSecret(runContext.render(this.applicationCredentialSecret).as(String.class).orElse(null))
-            .username(runContext.render(this.username).as(String.class).orElse(null))
-            .password(runContext.render(this.password).as(String.class).orElse(null))
-            .projectName(runContext.render(this.projectName).as(String.class).orElse(null))
-            .userDomainName(runContext.render(this.userDomainName).as(String.class).orElse("Default"))
-            .projectDomainName(runContext.render(this.projectDomainName).as(String.class).orElse("Default"))
-            .region(runContext.render(this.region).as(String.class).orElse(null))
-            .endpointType(runContext.render(this.endpointType).as(String.class).orElse("public"))
-            .build();
+    private boolean matchesEvent(String action, EventType filter) {
+        if (filter == EventType.ALL || action == null) {
+            return true;
+        }
+        var act = action.toLowerCase(Locale.ROOT);
+        return switch (filter) {
+            case CREATE -> act.contains("create");
+            case START -> act.contains("start");
+            case STOP -> act.contains("stop");
+            case REBOOT -> act.contains("reboot");
+            case PAUSE -> act.contains("pause");
+            case SUSPEND -> act.contains("suspend");
+            case RESUME -> act.contains("resume");
+            case DELETE -> act.contains("delete");
+            case RESIZE -> act.contains("resize");
+            case REBUILD -> act.contains("rebuild");
+            default -> true;
+        };
+    }
+
+    private boolean matchesStatusEvent(String status, EventType filter) {
+        if (filter == EventType.ALL || status == null) {
+            return true;
+        }
+        var st = status.toUpperCase(Locale.ROOT);
+        return switch (filter) {
+            case START -> "ACTIVE".equals(st);
+            case STOP -> "SHUTOFF".equals(st);
+            case PAUSE -> "PAUSED".equals(st);
+            case SUSPEND -> "SUSPENDED".equals(st);
+            case DELETE -> "DELETED".equals(st);
+            default -> false;
+        };
+    }
+
+    @Getter
+    @Builder
+    @ToString
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ServerEvent {
+        @Schema(
+            title = "Server UUID",
+            description = """
+                The unique identifier of the server.
+                """
+        )
+        private String serverId;
+
+        @Schema(
+            title = "Server Name",
+            description = """
+                Human-readable name of the server instance.
+                """
+        )
+        private String serverName;
+
+        @Schema(
+            title = "Event Type",
+            description = """
+                The event or action name triggered (e.g. start, stop, reboot, SHUTOFF).
+                """
+        )
+        private String eventType;
+
+        @Schema(
+            title = "Action Request ID",
+            description = """
+                Unique request ID of the instance action in Nova, if available.
+                """
+        )
+        private String requestId;
+
+        @Schema(
+            title = "Event Timestamp",
+            description = """
+                ISO 8601 timestamp of when the event occurred.
+                """
+        )
+        private String timestamp;
     }
 
     @Getter
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Matched servers",
+            title = "Detected server events",
             description = """
-                List of server instances that triggered the execution.
+                List of compact server lifecycle events that triggered the execution.
                 """
         )
-        private final List<Server> servers;
+        private final List<ServerEvent> events;
 
         @Schema(
-            title = "Matched server count",
+            title = "Event count",
             description = """
                 The number of server events detected.
                 """

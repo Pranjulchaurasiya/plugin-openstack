@@ -1,6 +1,5 @@
 package io.kestra.plugin.openstack.client;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.kestra.core.http.HttpRequest;
 import io.kestra.core.http.HttpResponse;
@@ -19,6 +18,8 @@ import java.io.Closeable;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 
 public class OpenStackClient implements Closeable {
@@ -59,6 +60,7 @@ public class OpenStackClient implements Closeable {
     private String computeUrl;
     @Getter
     private String imageUrl;
+    private String networkUrl;
 
     @Builder
     public OpenStackClient(
@@ -100,7 +102,7 @@ public class OpenStackClient implements Closeable {
         if (url == null) {
             return null;
         }
-        String trimmed = url.trim();
+        var trimmed = url.trim();
         while (trimmed.endsWith("/")) {
             trimmed = trimmed.substring(0, trimmed.length() - 1);
         }
@@ -112,7 +114,7 @@ public class OpenStackClient implements Closeable {
             return;
         }
 
-        KeystoneAuthRequest.Identity.IdentityBuilder identityBuilder = KeystoneAuthRequest.Identity.builder();
+        var identityBuilder = KeystoneAuthRequest.Identity.builder();
         KeystoneAuthRequest.Scope scope = null;
 
         if (StringUtils.isNotBlank(applicationCredentialId) && StringUtils.isNotBlank(applicationCredentialSecret)) {
@@ -147,20 +149,20 @@ public class OpenStackClient implements Closeable {
             );
         }
 
-        KeystoneAuthRequest authRequest = KeystoneAuthRequest.builder()
+        var authRequest = KeystoneAuthRequest.builder()
             .auth(KeystoneAuthRequest.Auth.builder()
                 .identity(identityBuilder.build())
                 .scope(scope)
                 .build())
             .build();
 
-        String tokenEndpoint = this.authUrl.endsWith("/v3")
+        var tokenEndpoint = this.authUrl.endsWith("/v3")
             ? this.authUrl + "/auth/tokens"
             : (this.authUrl.endsWith("/auth/tokens") ? this.authUrl : this.authUrl + "/v3/auth/tokens");
 
-        String requestBody = MAPPER.writeValueAsString(authRequest);
+        var requestBody = MAPPER.writeValueAsString(authRequest);
 
-        HttpRequest req = HttpRequest.builder()
+        var req = HttpRequest.builder()
             .method("POST")
             .uri(URI.create(tokenEndpoint))
             .addHeader("Content-Type", "application/json")
@@ -172,12 +174,12 @@ public class OpenStackClient implements Closeable {
                 .build())
             .build();
 
-        HttpResponse<String> resp = executeHttp(req, String.class);
+        var resp = executeHttp(req, String.class);
 
         this.token = resp.getHeaders().firstValue("X-Subject-Token")
             .orElseThrow(() -> new IllegalStateException("Keystone response did not contain X-Subject-Token header"));
 
-        KeystoneTokenResponse tokenResponse = MAPPER.readValue(resp.getBody(), KeystoneTokenResponse.class);
+        var tokenResponse = parseResponse(resp, KeystoneTokenResponse.class, "Keystone token authentication");
         resolveServiceEndpoints(tokenResponse);
     }
 
@@ -186,20 +188,27 @@ public class OpenStackClient implements Closeable {
             throw new IllegalStateException("Keystone token response contains empty service catalog.");
         }
 
-        List<KeystoneTokenResponse.ServiceCatalogEntry> catalog = tokenResponse.getToken().getCatalog();
+        var catalog = tokenResponse.getToken().getCatalog();
 
-        for (KeystoneTokenResponse.ServiceCatalogEntry entry : catalog) {
+        for (var entry : catalog) {
             if ("compute".equalsIgnoreCase(entry.getType()) && entry.getEndpoints() != null) {
-                for (KeystoneTokenResponse.ServiceEndpoint ep : entry.getEndpoints()) {
+                for (var ep : entry.getEndpoints()) {
                     if (matchesEndpoint(ep)) {
                         this.computeUrl = cleanUrl(ep.getUrl());
                         break;
                     }
                 }
             } else if ("image".equalsIgnoreCase(entry.getType()) && entry.getEndpoints() != null) {
-                for (KeystoneTokenResponse.ServiceEndpoint ep : entry.getEndpoints()) {
+                for (var ep : entry.getEndpoints()) {
                     if (matchesEndpoint(ep)) {
                         this.imageUrl = cleanUrl(ep.getUrl());
+                        break;
+                    }
+                }
+            } else if ("network".equalsIgnoreCase(entry.getType()) && entry.getEndpoints() != null) {
+                for (var ep : entry.getEndpoints()) {
+                    if (matchesEndpoint(ep)) {
+                        this.networkUrl = cleanUrl(ep.getUrl());
                         break;
                     }
                 }
@@ -215,7 +224,7 @@ public class OpenStackClient implements Closeable {
         if (ep.getUrl() == null) {
             return false;
         }
-        boolean interfaceMatch = this.endpointType.equalsIgnoreCase(ep.getInterfaceType());
+        var interfaceMatch = this.endpointType.equalsIgnoreCase(ep.getInterfaceType());
         if (!interfaceMatch) {
             return false;
         }
@@ -225,34 +234,42 @@ public class OpenStackClient implements Closeable {
         return true;
     }
 
+    private <T> T parseResponse(HttpResponse<String> resp, Class<T> clazz, String operation) throws Exception {
+        var body = resp.getBody();
+        if (body == null || body.isBlank()) {
+            throw new IllegalStateException("Empty response body received from OpenStack API during " + operation);
+        }
+        return MAPPER.readValue(body, clazz);
+    }
+
     public Server createServer(ServerPayloads.Create payload) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers";
-        String body = MAPPER.writeValueAsString(payload);
+        var uri = this.computeUrl + "/servers";
+        var body = MAPPER.writeValueAsString(payload);
 
-        HttpRequest req = computeRequest("POST", uri, body);
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        ServerResponses.SingleServer single = MAPPER.readValue(resp.getBody(), ServerResponses.SingleServer.class);
+        var req = computeRequest("POST", uri, body);
+        var resp = executeHttp(req, String.class);
+        var single = parseResponse(resp, ServerResponses.SingleServer.class, "server creation");
         return single.getServer();
     }
 
     public Server getServer(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId);
 
-        HttpRequest req = computeRequest("GET", uri, null);
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        ServerResponses.SingleServer single = MAPPER.readValue(resp.getBody(), ServerResponses.SingleServer.class);
+        var req = computeRequest("GET", uri, null);
+        var resp = executeHttp(req, String.class);
+        var single = parseResponse(resp, ServerResponses.SingleServer.class, "get server");
         return single.getServer();
     }
 
     public List<Server> listServers(Map<String, String> queryParams) throws Exception {
         authenticate();
-        StringBuilder uriBuilder = new StringBuilder(this.computeUrl).append("/servers/detail");
+        var uriBuilder = new StringBuilder(this.computeUrl).append("/servers/detail");
         if (queryParams != null && !queryParams.isEmpty()) {
             uriBuilder.append("?");
-            boolean first = true;
-            for (Map.Entry<String, String> entry : queryParams.entrySet()) {
+            var first = true;
+            for (var entry : queryParams.entrySet()) {
                 if (entry.getValue() != null) {
                     if (!first) {
                         uriBuilder.append("&");
@@ -265,35 +282,35 @@ public class OpenStackClient implements Closeable {
             }
         }
 
-        HttpRequest req = computeRequest("GET", uriBuilder.toString(), null);
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        ServerResponses.MultipleServers multiple = MAPPER.readValue(resp.getBody(), ServerResponses.MultipleServers.class);
+        var req = computeRequest("GET", uriBuilder.toString(), null);
+        var resp = executeHttp(req, String.class);
+        var multiple = parseResponse(resp, ServerResponses.MultipleServers.class, "list servers");
         return multiple != null && multiple.getServers() != null ? multiple.getServers() : Collections.emptyList();
     }
 
     public Server updateServer(String serverId, ServerPayloads.Update payload) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
-        String body = MAPPER.writeValueAsString(payload);
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId);
+        var body = MAPPER.writeValueAsString(payload);
 
-        HttpRequest req = computeRequest("PUT", uri, body);
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        ServerResponses.SingleServer single = MAPPER.readValue(resp.getBody(), ServerResponses.SingleServer.class);
+        var req = computeRequest("PUT", uri, body);
+        var resp = executeHttp(req, String.class);
+        var single = parseResponse(resp, ServerResponses.SingleServer.class, "update server");
         return single.getServer();
     }
 
     public void deleteServer(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + pathSegment(serverId);
-        HttpRequest req = computeRequest("DELETE", uri, null);
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId);
+        var req = computeRequest("DELETE", uri, null);
         executeHttp(req, String.class);
     }
 
     public String serverAction(String serverId, String actionJson) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/action";
-        HttpRequest req = computeRequest("POST", uri, actionJson);
-        HttpResponse<String> resp = executeHttp(req, String.class);
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/action";
+        var req = computeRequest("POST", uri, actionJson);
+        var resp = executeHttp(req, String.class);
         return resp.getBody();
     }
 
@@ -321,19 +338,27 @@ public class OpenStackClient implements Closeable {
         serverAction(serverId, "{\"resume\": null}");
     }
 
+    public void resizeServer(String serverId, String flavorId) throws Exception {
+        serverAction(serverId, "{\"resize\": {\"flavorRef\": \"" + flavorId + "\"}}");
+    }
+
+    public void confirmResize(String serverId) throws Exception {
+        serverAction(serverId, "{\"confirmResize\": null}");
+    }
+
     public String createSnapshot(String serverId, String snapshotName, Map<String, String> metadata) throws Exception {
         authenticate();
-        Map<String, Object> inner = new HashMap<>();
+        var inner = new HashMap<String, Object>();
         inner.put("name", snapshotName);
         if (metadata != null && !metadata.isEmpty()) {
             inner.put("metadata", metadata);
         }
-        Map<String, Object> payload = Map.of("createImage", inner);
-        String body = MAPPER.writeValueAsString(payload);
+        var payload = Map.of("createImage", inner);
+        var body = MAPPER.writeValueAsString(payload);
 
-        String respJson = serverAction(serverId, body);
+        var respJson = serverAction(serverId, body);
         if (StringUtils.isNotBlank(respJson)) {
-            ServerResponses.CreateImage img = MAPPER.readValue(respJson, ServerResponses.CreateImage.class);
+            var img = MAPPER.readValue(respJson, ServerResponses.CreateImage.class);
             return img.getImageId();
         }
         return null;
@@ -345,11 +370,45 @@ public class OpenStackClient implements Closeable {
 
     public Map<String, String> getServerMetadata(String serverId) throws Exception {
         authenticate();
-        String uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/metadata";
-        HttpRequest req = computeRequest("GET", uri, null);
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        ServerResponses.Metadata meta = MAPPER.readValue(resp.getBody(), ServerResponses.Metadata.class);
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/metadata";
+        var req = computeRequest("GET", uri, null);
+        var resp = executeHttp(req, String.class);
+        var meta = parseResponse(resp, ServerResponses.Metadata.class, "get server metadata");
         return meta != null && meta.getMetadata() != null ? meta.getMetadata() : Collections.emptyMap();
+    }
+
+    public void updateServerMetadata(String serverId, Map<String, String> metadata) throws Exception {
+        authenticate();
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/metadata";
+        var body = MAPPER.writeValueAsString(Map.of("metadata", metadata));
+        var req = computeRequest("POST", uri, body);
+        executeHttp(req, String.class);
+    }
+
+    public void attachInterface(String serverId, String networkId) throws Exception {
+        authenticate();
+        var uri = this.computeUrl + "/servers/" + pathSegment(serverId) + "/os-interface";
+        var body = MAPPER.writeValueAsString(Map.of("interfaceAttachment", Map.of("net_id", networkId)));
+        var req = computeRequest("POST", uri, body);
+        executeHttp(req, String.class);
+    }
+
+    public GlanceResponses.GlanceImage getImage(String imageId) throws Exception {
+        authenticate();
+        if (this.imageUrl == null) {
+            throw new IllegalStateException("Glance image service URL is not resolved from service catalog.");
+        }
+        var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
+        var uri = baseImage + "/images/" + imageId;
+        var req = HttpRequest.builder()
+            .method("GET")
+            .uri(URI.create(uri))
+            .addHeader("X-Auth-Token", this.token)
+            .addHeader("Accept", "application/json")
+            .build();
+
+        var resp = executeHttp(req, String.class);
+        return parseResponse(resp, GlanceResponses.GlanceImage.class, "get glance image");
     }
 
     public List<GlanceResponses.GlanceImage> listServerSnapshots(String serverId) throws Exception {
@@ -357,19 +416,19 @@ public class OpenStackClient implements Closeable {
         if (this.imageUrl == null) {
             throw new IllegalStateException("Glance image service URL is not resolved from service catalog.");
         }
-        String baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
-        String uri = baseImage + "/images?instance_uuid=" + URLEncoder.encode(serverId, StandardCharsets.UTF_8)
+        var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
+        var uri = baseImage + "/images?instance_uuid=" + URLEncoder.encode(serverId, StandardCharsets.UTF_8)
             + "&image_type=snapshot";
 
-        HttpRequest req = HttpRequest.builder()
+        var req = HttpRequest.builder()
             .method("GET")
             .uri(URI.create(uri))
             .addHeader("X-Auth-Token", this.token)
             .addHeader("Accept", "application/json")
             .build();
 
-        HttpResponse<String> resp = executeHttp(req, String.class);
-        GlanceResponses.MultipleImages res = MAPPER.readValue(resp.getBody(), GlanceResponses.MultipleImages.class);
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, GlanceResponses.MultipleImages.class, "list server snapshots");
         return res != null && res.getImages() != null ? res.getImages() : Collections.emptyList();
     }
 
@@ -378,9 +437,9 @@ public class OpenStackClient implements Closeable {
         if (this.imageUrl == null) {
             throw new IllegalStateException("Glance image service URL is not resolved from service catalog.");
         }
-        String baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
-        String uri = baseImage + "/images/" + pathSegment(imageId);
-        HttpRequest req = HttpRequest.builder()
+        var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
+        var uri = baseImage + "/images/" + pathSegment(imageId);
+        var req = HttpRequest.builder()
             .method("DELETE")
             .uri(URI.create(uri))
             .addHeader("X-Auth-Token", this.token)
@@ -390,8 +449,176 @@ public class OpenStackClient implements Closeable {
         executeHttp(req, String.class);
     }
 
+    public List<FlavorResponses.Flavor> listFlavors() throws Exception {
+        authenticate();
+        var uri = this.computeUrl + "/flavors/detail";
+        var req = computeRequest("GET", uri, null);
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, FlavorResponses.MultipleFlavors.class, "list flavors");
+        return res != null && res.getFlavors() != null ? res.getFlavors() : Collections.emptyList();
+    }
+
+    public String resolveFlavorId(String flavorNameOrId) throws Exception {
+        if (StringUtils.isBlank(flavorNameOrId)) {
+            return null;
+        }
+        var flavors = listFlavors();
+        var matches = new ArrayList<FlavorResponses.Flavor>();
+        for (var flv : flavors) {
+            if (flavorNameOrId.equals(flv.getId()) || flavorNameOrId.equalsIgnoreCase(flv.getName())) {
+                matches.add(flv);
+            }
+        }
+        if (matches.isEmpty()) {
+            throw new IllegalArgumentException("OpenStack flavor not found: '" + flavorNameOrId + "'");
+        }
+        if (matches.size() > 1) {
+            throw new IllegalArgumentException("Ambiguous OpenStack flavor: '" + flavorNameOrId + "' matches "
+                + matches.size() + " flavors. Please specify the exact flavor UUID.");
+        }
+        return matches.get(0).getId();
+    }
+
+    public String resolveImageId(String imageNameOrId) throws Exception {
+        if (StringUtils.isBlank(imageNameOrId)) {
+            return null;
+        }
+        authenticate();
+        if (this.imageUrl == null) {
+            return imageNameOrId;
+        }
+        var baseImage = this.imageUrl.endsWith("/v2") ? this.imageUrl : this.imageUrl + "/v2";
+
+        // Try direct lookup by ID first if UUID pattern
+        try {
+            var directImage = getImage(imageNameOrId);
+            if (directImage != null && directImage.getId() != null) {
+                return directImage.getId();
+            }
+        } catch (Exception ignored) {
+        }
+
+        // Query by name
+        var uri = baseImage + "/images?name=" + URLEncoder.encode(imageNameOrId, StandardCharsets.UTF_8);
+        var req = HttpRequest.builder()
+            .method("GET")
+            .uri(URI.create(uri))
+            .addHeader("X-Auth-Token", this.token)
+            .addHeader("Accept", "application/json")
+            .build();
+
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, GlanceResponses.MultipleImages.class, "resolve image");
+        var images = res != null && res.getImages() != null ? res.getImages() : Collections.<GlanceResponses.GlanceImage>emptyList();
+
+        if (images.isEmpty()) {
+            throw new IllegalArgumentException("OpenStack image not found: '" + imageNameOrId + "'");
+        }
+        if (images.size() > 1) {
+            throw new IllegalArgumentException("Ambiguous OpenStack image: '" + imageNameOrId + "' matches "
+                + images.size() + " images. Please specify the exact image UUID.");
+        }
+        return images.get(0).getId();
+    }
+
+    public String resolveNetworkId(String networkNameOrId) throws Exception {
+        if (StringUtils.isBlank(networkNameOrId)) {
+            return null;
+        }
+        authenticate();
+        if (this.networkUrl == null) {
+            // If no network service in catalog, return networkNameOrId as is
+            return networkNameOrId;
+        }
+        var baseNetwork = this.networkUrl.endsWith("/v2.0") ? this.networkUrl : this.networkUrl + "/v2.0";
+        var uri = baseNetwork + "/networks";
+        var req = HttpRequest.builder()
+            .method("GET")
+            .uri(URI.create(uri))
+            .addHeader("X-Auth-Token", this.token)
+            .addHeader("Accept", "application/json")
+            .build();
+
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, NetworkResponses.MultipleNetworks.class, "resolve network");
+        var networks = res != null && res.getNetworks() != null ? res.getNetworks() : Collections.<NetworkResponses.Network>emptyList();
+
+        var matches = new ArrayList<NetworkResponses.Network>();
+        for (var net : networks) {
+            if (networkNameOrId.equals(net.getId()) || networkNameOrId.equalsIgnoreCase(net.getName())) {
+                matches.add(net);
+            }
+        }
+        if (matches.isEmpty()) {
+            throw new IllegalArgumentException("OpenStack network not found: '" + networkNameOrId + "'");
+        }
+        if (matches.size() > 1) {
+            throw new IllegalArgumentException("Ambiguous OpenStack network: '" + networkNameOrId + "' matches "
+                + matches.size() + " networks. Please specify the exact network UUID.");
+        }
+        return matches.get(0).getId();
+    }
+
+    public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout, RunContext runContext) throws Exception {
+        var start = Instant.now();
+        var limit = timeout != null ? timeout : Duration.ofMinutes(10);
+
+        while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+            var img = getImage(imageId);
+            var status = img.getStatus();
+            if ("active".equalsIgnoreCase(status)) {
+                return img;
+            }
+            if ("killed".equalsIgnoreCase(status) || "deleted".equalsIgnoreCase(status)) {
+                throw new IllegalStateException("Snapshot image '" + imageId + "' entered failure status: " + status);
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while polling image active status", e);
+            }
+        }
+        throw new IllegalStateException("Timed out waiting for snapshot image '" + imageId + "' to become active (limit: " + limit + ").");
+    }
+
+    public Server waitForServerStatus(String serverId, String targetStatus, Duration timeout, RunContext runContext) throws Exception {
+        var start = Instant.now();
+        var limit = timeout != null ? timeout : Duration.ofMinutes(10);
+
+        while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+            var srv = getServer(serverId);
+            var status = srv.getStatus();
+            if (targetStatus.equalsIgnoreCase(status)) {
+                return srv;
+            }
+            if ("ERROR".equalsIgnoreCase(status)) {
+                throw new IllegalStateException("Server '" + serverId + "' entered ERROR status.");
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while polling server status", e);
+            }
+        }
+        throw new IllegalStateException("Timed out waiting for server '" + serverId + "' to reach status '" + targetStatus + "' (limit: " + limit + ").");
+    }
+
+    public List<InstanceActionResponses.InstanceAction> listInstanceActions(String serverId, String changesSince) throws Exception {
+        authenticate();
+        var uriBuilder = new StringBuilder(this.computeUrl).append("/servers/").append(serverId).append("/os-instance-actions");
+        if (StringUtils.isNotBlank(changesSince)) {
+            uriBuilder.append("?changes-since=").append(URLEncoder.encode(changesSince, StandardCharsets.UTF_8));
+        }
+        var req = computeRequest("GET", uriBuilder.toString(), null);
+        var resp = executeHttp(req, String.class);
+        var res = parseResponse(resp, InstanceActionResponses.MultipleActions.class, "list instance actions");
+        return res != null && res.getInstanceActions() != null ? res.getInstanceActions() : Collections.emptyList();
+    }
+
     private HttpRequest computeRequest(String method, String uri, String body) {
-        HttpRequest.HttpRequestBuilder builder = HttpRequest.builder()
+        var builder = HttpRequest.builder()
             .method(method)
             .uri(URI.create(uri))
             .addHeader("X-Auth-Token", this.token)
@@ -414,11 +641,24 @@ public class OpenStackClient implements Closeable {
         try {
             return httpClient.request(request, responseType);
         } catch (HttpClientResponseException e) {
-            String errorBody = "";
-            if (e.getResponse() != null && e.getResponse().getBody() != null) {
-                errorBody = " | Response Body: " + e.getResponse().getBody();
+            var response = e.getResponse();
+            var statusCode = response != null && response.getStatus() != null ? response.getStatus().getCode() : 0;
+            var errorBody = response != null && response.getBody() != null ? response.getBody().toString() : "";
+
+            if (statusCode == 401 || statusCode == 403) {
+                throw new IllegalStateException("OpenStack authentication/authorization failed (HTTP " + statusCode
+                    + "). Please verify Keystone credentials, project scope, user domain, and role permissions. Response: " + errorBody, e);
+            } else if (statusCode == 404) {
+                throw new IllegalArgumentException("OpenStack resource not found (HTTP 404). Please verify that the specified resource ID or endpoint exists. Response: " + errorBody, e);
+            } else if (statusCode == 406) {
+                throw new IllegalStateException("OpenStack compute microversion rejected (HTTP 406). Ensure Nova supports API microversion "
+                    + NOVA_MICROVERSION + ". Response: " + errorBody, e);
+            } else if (statusCode == 409) {
+                throw new IllegalStateException("OpenStack conflict (HTTP 409). The resource is in an incompatible state for this operation. Response: " + errorBody, e);
             }
-            throw new RuntimeException("OpenStack HTTP error: " + e.getMessage() + errorBody, e);
+
+            throw new RuntimeException("OpenStack HTTP error (HTTP " + statusCode + "): " + e.getMessage()
+                + (errorBody.isEmpty() ? "" : " | Response Body: " + errorBody), e);
         }
     }
 

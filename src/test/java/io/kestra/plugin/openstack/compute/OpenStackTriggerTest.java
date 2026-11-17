@@ -6,11 +6,15 @@ import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.executions.Execution;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
+import io.kestra.plugin.openstack.client.model.EventType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -47,7 +51,7 @@ class OpenStackTriggerTest {
     void setupStubs() {
         wireMockServer.resetAll();
 
-        String tokenBody = String.format("""
+        var tokenBody = String.format("""
             {
               "token": {
                 "expires_at": "2099-01-01T00:00:00.000000Z",
@@ -89,29 +93,55 @@ class OpenStackTriggerTest {
                         {
                           "id": "srv-prod-01",
                           "name": "prod-app-01",
-                          "status": "SHUTOFF"
+                          "status": "SHUTOFF",
+                          "updated": "2026-11-17T10:00:00Z"
                         }
                       ]
                     }
                     """)));
 
-        Trigger trigger = Trigger.builder()
-            .id("watch_openstack")
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/srv-prod-01/os-instance-actions"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "instanceActions": [
+                        {
+                          "action": "stop",
+                          "instance_uuid": "srv-prod-01",
+                          "request_id": "req-stop-9988",
+                          "start_time": "2026-11-17T10:00:00Z"
+                        }
+                      ]
+                    }
+                    """)));
+
+        var trigger = Trigger.builder()
+            .id("watch_openstack_" + IdUtils.create())
             .type(Trigger.class.getName())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-id"))
             .applicationCredentialSecret(Property.ofValue("app-secret"))
             .status(Property.ofValue("SHUTOFF"))
             .serverNameRegex(Property.ofValue("prod-.*"))
+            .eventType(Property.ofValue(EventType.STOP))
             .interval(Duration.ofMinutes(1))
             .build();
 
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
-        Optional<Execution> executionOptional = trigger.evaluate(context.getKey(), context.getValue());
+        var executionOptional = trigger.evaluate(context.getKey(), context.getValue());
 
         assertTrue(executionOptional.isPresent(), "Trigger should evaluate and return an execution.");
-        Execution execution = executionOptional.get();
+        var execution = executionOptional.get();
         assertThat(execution.getTrigger().getVariables().get("size"), is(1));
+
+        @SuppressWarnings("unchecked")
+        var events = (List<Map<String, Object>>) execution.getTrigger().getVariables().get("events");
+        assertThat(events, hasSize(1));
+        assertThat(events.getFirst().get("serverId"), is("srv-prod-01"));
+        assertThat(events.getFirst().get("eventType"), is("stop"));
+        assertThat(events.getFirst().get("requestId"), is("req-stop-9988"));
     }
 
     @Test
@@ -122,8 +152,8 @@ class OpenStackTriggerTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"servers\": []}")));
 
-        Trigger trigger = Trigger.builder()
-            .id("watch_openstack")
+        var trigger = Trigger.builder()
+            .id("watch_openstack_" + IdUtils.create())
             .type(Trigger.class.getName())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-id"))
@@ -132,7 +162,7 @@ class OpenStackTriggerTest {
             .build();
 
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
-        Optional<Execution> executionOptional = trigger.evaluate(context.getKey(), context.getValue());
+        var executionOptional = trigger.evaluate(context.getKey(), context.getValue());
         assertTrue(executionOptional.isEmpty(), "Trigger should return empty when no servers match.");
     }
 }

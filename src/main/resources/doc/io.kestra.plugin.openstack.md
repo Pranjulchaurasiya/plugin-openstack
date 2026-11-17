@@ -38,18 +38,26 @@ tasks:
     region: "RegionOne"
 ```
 
+## OpenStack Snapshot Architecture Gotcha
+
+In OpenStack, VM snapshots created via Nova's `createImage` action are stored and managed directly in Glance (`/v2/images`). Consequently:
+- Snapshot operations (such as listing, restoring, and deleting) use Glance image UUIDs (`imageId`).
+- When a snapshot is initiated, Glance transitions through asynchronous statuses (`queued` -> `saving` -> `active`). Tasks like `CloneServer` automatically wait for the Glance image to reach `active` status before booting the clone instance.
+
+---
+
 ## Compute Tasks
 
 ### Virtual Machine Provisioning & Lifecycle
 
-- **CreateServer**: Provision a new Nova VM instance.
-  - **Required fields**: `name`, `flavorRef`, `imageRef`
-  - **Optional fields**: `networks` (list of UUIDs), `keyName`, `userData`, `metadata`, `serverDescription`, `tags`
-- **ListServers**: Query servers with regex filtering, status filters, and pagination markers.
-  - **Optional fields**: `nameRegex`, `status` (`ACTIVE`, `SHUTOFF`, `ERROR`, etc.), `changesSince`, `limit`, `marker`
-- **UpdateServer**: Update mutable attributes (name, description) of an existing server.
+- **CreateServer**: Provision a new Nova VM instance with automatic name resolution (flavor, image, network) and base64 cloud-init encoding.
+  - **Required fields**: `name`, `flavorRef` (flavor UUID or name)
+  - **Optional fields**: `imageRef` (image UUID or name), `networks` (list of network/port UUIDs or names), `keyName`, `userData`, `metadata`, `adminPass`, `serverDescription`, `tags`, `waitUntilComplete` (defaults to `true`), `timeout`
+- **ListServers**: Query servers with regex filtering, status filters, and pagination markers; supports `FETCH`, `FETCH_ONE`, and `STORE` (persisted to Kestra internal storage) fetch modes.
+  - **Optional fields**: `fetchType` (`FETCH`, `FETCH_ONE`, `STORE`), `name`, `nameRegex`, `status` (`ACTIVE`, `SHUTOFF`, `ERROR`, etc.), `changesSince`, `limit`, `marker`
+- **UpdateServer**: Update mutable attributes (name, server description, flavor resize with auto-confirmation, network attachments, metadata) of an existing server.
   - **Required fields**: `serverId`
-  - **Optional fields**: `name`, `serverDescription`
+  - **Optional fields**: `name`, `serverDescription`, `flavorRef`, `autoConfirmResize` (defaults to `true`), `metadata`, `networkId`
 - **DeleteServer**: Terminate and permanently delete a VM instance.
   - **Required fields**: `serverId`
 - **GetServerMetadata**: Retrieve key-value metadata attached to a server.
@@ -79,14 +87,14 @@ tasks:
 - **ListServerSnapshots**: List all snapshot images belonging to an instance.
   - **Required fields**: `serverId`
 - **DeleteServerSnapshot**: Permanently delete a snapshot image from Glance.
-  - **Required fields**: `snapshotId`
+  - **Required fields**: `imageId`
 - **RestoreServerFromSnapshot**: Rebuild an existing server instance from a snapshot image.
-  - **Required fields**: `serverId`, `imageRef`
-- **CloneServer**: Orchestrate automated server cloning by snapshotting a source server and launching a new instance from that snapshot.
-  - **Required fields**: `sourceServerId`, `cloneName`, `flavorRef`
-  - **Optional fields**: `networks`, `deleteSnapshotAfterClone` (defaults to `false`), `metadata`
+  - **Required fields**: `serverId`, `imageId`
+- **CloneServer**: Orchestrate automated server cloning by snapshotting a source server, waiting for the snapshot to become active in Glance, and launching a new instance from that snapshot.
+  - **Required fields**: `sourceServerId`, `name`
+  - **Optional fields**: `flavorRef`, `networks`, `snapshotName`, `deleteSnapshotAfterClone` (defaults to `false`), `timeout`
 
 ## Trigger
 
-- **Trigger**: Polling trigger that queries OpenStack Nova for servers matching status, name regex, and state changes, dispatching flow executions automatically.
-  - **Properties**: `status`, `serverNameRegex`, `interval` (polling interval)
+- **Trigger**: Polling trigger that monitors OpenStack Nova compute servers for state changes and lifecycle events using KV Store watermarking and event filtering.
+  - **Properties**: `status`, `serverNameRegex`, `eventType` (`ALL`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`), `maxEvents` (defaults to 100), `interval` (defaults to `PT1M`)

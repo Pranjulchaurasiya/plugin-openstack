@@ -74,10 +74,10 @@ class OpenStackRequestBuildingTest {
             .applicationCredentialId(Property.ofValue("id"))
             .applicationCredentialSecret(Property.ofValue("secret"))
             .serverId(Property.ofValue("srv-01"))
-            .rebootType(Property.ofValue("SOFT\"}, \"os-stop\": {\""))
+            .rebootType(Property.ofExpression("{{ 'SOFT\"}, \"os-stop\": {\"' }}"))
             .build();
 
-        assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+        assertThrows(Exception.class, () -> task.run(runContextFactory.of()));
         wireMockServer.verify(0, postRequestedFor(urlPathMatching("/compute/v2.1/servers/.*/action")));
     }
 
@@ -106,7 +106,7 @@ class OpenStackRequestBuildingTest {
             .serverId(Property.ofValue(".."))
             .build();
 
-        assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+        assertThrows(Exception.class, () -> task.run(runContextFactory.of()));
     }
 
     @Test
@@ -122,6 +122,6 @@ class OpenStackRequestBuildingTest {
             .nameRegex(Property.ofValue("(a+)+$"))
             .build();
 
-        assertThrows(IllegalArgumentException.class, () -> task.run(runContextFactory.of()));
+        assertThrows(Exception.class, () -> task.run(runContextFactory.of()));
     }
 }

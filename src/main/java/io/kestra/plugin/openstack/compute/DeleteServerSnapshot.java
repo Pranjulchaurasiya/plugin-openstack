@@ -6,12 +6,10 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 @SuperBuilder
 @ToString
@@ -58,12 +56,13 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rImageId = runContext.render(this.imageId).as(String.class).orElseThrow();
+        var logger = runContext.logger();
+        var rImageId = runContext.render(this.imageId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`imageId` is required for DeleteServerSnapshot"));
 
         logger.info("Deleting Glance snapshot image '{}'...", rImageId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
+        try (var client = this.createClient(runContext)) {
             client.deleteSnapshot(rImageId);
             logger.info("Successfully deleted snapshot image '{}'.", rImageId);
 

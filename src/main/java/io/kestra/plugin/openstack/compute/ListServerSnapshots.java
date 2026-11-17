@@ -6,13 +6,11 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.model.GlanceResponses;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 import java.util.List;
 
@@ -61,13 +59,14 @@ public class ListServerSnapshots extends AbstractComputeTask implements Runnable
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required for ListServerSnapshots"));
 
         logger.info("Listing snapshot images for OpenStack server '{}'...", rServerId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            List<GlanceResponses.GlanceImage> snapshots = client.listServerSnapshots(rServerId);
+        try (var client = this.createClient(runContext)) {
+            var snapshots = client.listServerSnapshots(rServerId);
             logger.info("Found {} snapshot(s) for server '{}'.", snapshots.size(), rServerId);
 
             return Output.builder()
@@ -100,7 +99,7 @@ public class ListServerSnapshots extends AbstractComputeTask implements Runnable
         @Schema(
             title = "Snapshot count",
             description = """
-                The number of snapshots found.
+                The number of snapshots returned.
                 """
         )
         private final int size;

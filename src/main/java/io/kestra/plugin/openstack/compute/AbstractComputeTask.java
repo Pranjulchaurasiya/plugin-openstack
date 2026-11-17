@@ -6,6 +6,7 @@ import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.Task;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.openstack.client.OpenStackClient;
+import io.kestra.plugin.openstack.client.model.EndpointType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.Builder;
@@ -20,7 +21,7 @@ import lombok.experimental.SuperBuilder;
 @EqualsAndHashCode
 @Getter
 @NoArgsConstructor
-public abstract class AbstractComputeTask extends Task {
+public abstract class AbstractComputeTask extends Task implements OpenStackConnectionInterface {
 
     @NotNull
     @Schema(
@@ -113,12 +114,12 @@ public abstract class AbstractComputeTask extends Task {
     @Schema(
         title = "Endpoint interface type",
         description = """
-            The endpoint interface type to resolve from the service catalog: `public`, `internal`, or `admin`. Defaults to `public`.
+            The endpoint interface type to resolve from the service catalog: `PUBLIC`, `INTERNAL`, or `ADMIN`. Defaults to `PUBLIC`.
             """
     )
     @PluginProperty(group = "connection")
     @Builder.Default
-    protected Property<String> endpointType = Property.ofValue("public");
+    protected Property<EndpointType> endpointType = Property.ofValue(EndpointType.PUBLIC);
 
     @Schema(
         title = "HTTP client options",
@@ -130,19 +131,6 @@ public abstract class AbstractComputeTask extends Task {
     protected HttpConfiguration options;
 
     protected OpenStackClient createClient(RunContext runContext) throws Exception {
-        return OpenStackClient.builder()
-            .runContext(runContext)
-            .httpConfiguration(this.options)
-            .authUrl(runContext.render(this.authUrl).as(String.class).orElse(null))
-            .applicationCredentialId(runContext.render(this.applicationCredentialId).as(String.class).orElse(null))
-            .applicationCredentialSecret(runContext.render(this.applicationCredentialSecret).as(String.class).orElse(null))
-            .username(runContext.render(this.username).as(String.class).orElse(null))
-            .password(runContext.render(this.password).as(String.class).orElse(null))
-            .projectName(runContext.render(this.projectName).as(String.class).orElse(null))
-            .userDomainName(runContext.render(this.userDomainName).as(String.class).orElse("Default"))
-            .projectDomainName(runContext.render(this.projectDomainName).as(String.class).orElse("Default"))
-            .region(runContext.render(this.region).as(String.class).orElse(null))
-            .endpointType(runContext.render(this.endpointType).as(String.class).orElse("public"))
-            .build();
+        return OpenStackConnectionInterface.createClient(this, runContext);
     }
 }

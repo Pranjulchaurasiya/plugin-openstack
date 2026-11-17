@@ -2,16 +2,14 @@ package io.kestra.plugin.openstack.compute;
 
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotNull;
-import lombok.*;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 @SuperBuilder
 @ToString
@@ -19,15 +17,15 @@ import org.slf4j.Logger;
 @Getter
 @NoArgsConstructor
 @Schema(
-    title = "Stop an active OpenStack server",
+    title = "Stop a running OpenStack server",
     description = """
-        Sends the `os-stop` action to gracefully shut down an active OpenStack Nova compute server.
+        Sends the `os-stop` action to gracefully shut down a running OpenStack Nova compute server.
         """
 )
 @Plugin(
     examples = {
         @Example(
-            title = "Stop an active OpenStack server",
+            title = "Stop an OpenStack server",
             full = true,
             code = """
                 id: stop_openstack_server
@@ -44,44 +42,15 @@ import org.slf4j.Logger;
         )
     }
 )
-public class StopServer extends AbstractComputeTask implements RunnableTask<StopServer.Output> {
-
-    @NotNull
-    @Schema(
-        title = "Server UUID",
-        description = """
-            The unique identifier of the server to stop.
-            """
-    )
-    @PluginProperty(group = "main")
-    private Property<String> serverId;
+public class StopServer extends AbstractServerActionTask {
 
     @Override
-    public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-
-        logger.info("Stopping OpenStack server '{}'...", rServerId);
-
-        try (OpenStackClient client = this.createClient(runContext)) {
-            client.stopServer(rServerId);
-            logger.info("Successfully dispatched stop action for server '{}'.", rServerId);
-
-            return Output.builder()
-                .serverId(rServerId)
-                .build();
-        }
+    protected String actionName() {
+        return "os-stop";
     }
 
-    @Getter
-    @Builder
-    public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(
-            title = "Server UUID",
-            description = """
-                The UUID of the stopped server.
-                """
-        )
-        private final String serverId;
+    @Override
+    protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
+        client.stopServer(serverId);
     }
 }

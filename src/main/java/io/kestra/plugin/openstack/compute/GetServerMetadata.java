@@ -6,12 +6,10 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 import java.util.Map;
 
@@ -60,13 +58,14 @@ public class GetServerMetadata extends AbstractComputeTask implements RunnableTa
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required for GetServerMetadata"));
 
         logger.debug("Fetching metadata for OpenStack server '{}'...", rServerId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            Map<String, String> metadata = client.getServerMetadata(rServerId);
+        try (var client = this.createClient(runContext)) {
+            var metadata = client.getServerMetadata(rServerId);
             logger.info("Retrieved {} metadata key(s) for server '{}'.", metadata.size(), rServerId);
 
             return Output.builder()

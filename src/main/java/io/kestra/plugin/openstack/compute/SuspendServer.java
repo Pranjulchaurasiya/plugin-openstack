@@ -2,16 +2,14 @@ package io.kestra.plugin.openstack.compute;
 
 import io.kestra.core.models.annotations.Example;
 import io.kestra.core.models.annotations.Plugin;
-import io.kestra.core.models.annotations.PluginProperty;
-import io.kestra.core.models.property.Property;
-import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotNull;
-import lombok.*;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 @SuperBuilder
 @ToString
@@ -21,13 +19,13 @@ import org.slf4j.Logger;
 @Schema(
     title = "Suspend an OpenStack server",
     description = """
-        Suspends an active OpenStack Nova compute server, saving its memory state to disk and freeing hypervisor compute resources.
+        Sends the `suspend` action to suspend a running OpenStack Nova compute server to hypervisor memory.
         """
 )
 @Plugin(
     examples = {
         @Example(
-            title = "Suspend an active OpenStack server",
+            title = "Suspend an OpenStack server",
             full = true,
             code = """
                 id: suspend_openstack_server
@@ -44,44 +42,15 @@ import org.slf4j.Logger;
         )
     }
 )
-public class SuspendServer extends AbstractComputeTask implements RunnableTask<SuspendServer.Output> {
-
-    @NotNull
-    @Schema(
-        title = "Server UUID",
-        description = """
-            The unique identifier of the server to suspend.
-            """
-    )
-    @PluginProperty(group = "main")
-    private Property<String> serverId;
+public class SuspendServer extends AbstractServerActionTask {
 
     @Override
-    public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-
-        logger.info("Suspending OpenStack server '{}'...", rServerId);
-
-        try (OpenStackClient client = this.createClient(runContext)) {
-            client.suspendServer(rServerId);
-            logger.info("Successfully dispatched suspend action for server '{}'.", rServerId);
-
-            return Output.builder()
-                .serverId(rServerId)
-                .build();
-        }
+    protected String actionName() {
+        return "suspend";
     }
 
-    @Getter
-    @Builder
-    public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(
-            title = "Server UUID",
-            description = """
-                The UUID of the suspended server.
-                """
-        )
-        private final String serverId;
+    @Override
+    protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
+        client.suspendServer(serverId);
     }
 }

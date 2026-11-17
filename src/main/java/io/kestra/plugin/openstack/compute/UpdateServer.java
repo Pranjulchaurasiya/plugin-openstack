@@ -6,14 +6,15 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.kestra.plugin.openstack.client.model.ServerPayloads;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
+
+import java.util.List;
+import java.util.Map;
 
 @SuperBuilder
 @ToString
@@ -23,7 +24,7 @@ import org.slf4j.Logger;
 @Schema(
     title = "Update attributes of an OpenStack server",
     description = """
-        Updates the name or description of an existing OpenStack Nova compute server.
+        Updates the name, server description, flavor resize, attached network interfaces, or metadata of an existing OpenStack Nova compute server.
         """
 )
 @Plugin(
@@ -43,7 +44,7 @@ import org.slf4j.Logger;
                     applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CREDENTIAL_SECRET') }}"
                     serverId: "9a2f6dc1-b1e8-45d2-a745-cfa098650392"
                     name: "kestra-worker-renamed"
-                    description: "Updated by maintenance workflow"
+                    serverDescription: "Updated by maintenance workflow"
                 """
         )
     }
@@ -78,30 +79,99 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
     @PluginProperty(group = "main")
     private Property<String> serverDescription;
 
+    @Schema(
+        title = "Target flavor reference or ID",
+        description = """
+            New flavor to resize the server to.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    private Property<String> flavorRef;
+
+    @Schema(
+        title = "Auto-confirm resize",
+        description = """
+            Whether to automatically confirm the resize operation. Defaults to `true`.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<Boolean> autoConfirmResize = Property.ofValue(true);
+
+    @Schema(
+        title = "Server metadata",
+        description = """
+            Metadata key-value pairs to set or update on the server.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    private Property<Map<String, String>> metadata;
+
+    @Schema(
+        title = "Network UUID to attach",
+        description = """
+            UUID or name of a network interface to attach to the server.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    private Property<String> networkId;
+
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-        String rName = runContext.render(this.name).as(String.class).orElse(null);
-        String rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
-
-        ServerPayloads.Update payload = ServerPayloads.Update.builder()
-            .server(ServerPayloads.UpdateData.builder()
-                .name(rName)
-                .description(rDescription)
-                .build())
-            .build();
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required for UpdateServer"));
+        var rName = runContext.render(this.name).as(String.class).orElse(null);
+        var rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
+        var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
+        var rAutoConfirm = runContext.render(this.autoConfirmResize).as(Boolean.class).orElse(true);
+        var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
+        var rNetworkId = runContext.render(this.networkId).as(String.class).orElse(null);
 
         logger.info("Updating OpenStack server '{}'...", rServerId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            Server server = client.updateServer(rServerId, payload);
-            logger.info("Successfully updated server '{}': name='{}'", server.getId(), server.getName());
+        try (var client = this.createClient(runContext)) {
+            Server server = null;
+            if (rName != null || rDescription != null) {
+                var payload = ServerPayloads.Update.builder()
+                    .server(ServerPayloads.UpdateData.builder()
+                        .name(rName)
+                        .description(rDescription)
+                        .build())
+                    .build();
+                server = client.updateServer(rServerId, payload);
+                logger.info("Updated attributes for server '{}': name='{}'", server.getId(), server.getName());
+            }
+
+            if (rFlavorRef != null) {
+                var targetFlavorId = client.resolveFlavorId(rFlavorRef);
+                logger.info("Resizing server '{}' to flavor '{}'...", rServerId, targetFlavorId);
+                client.resizeServer(rServerId, targetFlavorId);
+                if (Boolean.TRUE.equals(rAutoConfirm)) {
+                    client.confirmResize(rServerId);
+                    logger.info("Confirmed resize for server '{}'.", rServerId);
+                }
+            }
+
+            if (rMetadata != null && !rMetadata.isEmpty()) {
+                logger.info("Updating metadata on server '{}'...", rServerId);
+                client.updateServerMetadata(rServerId, rMetadata);
+            }
+
+            if (rNetworkId != null) {
+                var resolvedNetId = client.resolveNetworkId(rNetworkId);
+                logger.info("Attaching network interface '{}' to server '{}'...", resolvedNetId, rServerId);
+                client.attachInterface(rServerId, resolvedNetId);
+            }
+
+            if (server == null) {
+                server = client.getServer(rServerId);
+            }
 
             return Output.builder()
-                .server(server)
                 .serverId(server.getId())
-                .name(server.getName())
+                .status(server.getStatus())
+                .addresses(server.getAddresses())
                 .build();
         }
     }
@@ -110,27 +180,27 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Updated server representation",
-            description = """
-                Full details of the updated OpenStack server.
-                """
-        )
-        private final Server server;
-
-        @Schema(
             title = "Server UUID",
             description = """
-                The UUID of the updated server.
+                The unique identifier of the updated server.
                 """
         )
         private final String serverId;
 
         @Schema(
-            title = "Updated server name",
+            title = "Server status",
             description = """
-                The new name of the server.
+                The current status of the server.
                 """
         )
-        private final String name;
+        private final String status;
+
+        @Schema(
+            title = "IP addresses",
+            description = """
+                Network IP addresses assigned to the server.
+                """
+        )
+        private final Map<String, List<Server.Address>> addresses;
     }
 }

@@ -6,18 +6,16 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.model.Server;
 import io.kestra.plugin.openstack.client.model.ServerPayloads;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.*;
 
 @SuperBuilder
 @ToString
@@ -80,7 +78,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     @Schema(
         title = "Image reference or ID",
         description = """
-            The UUID or URN of the Glance operating system image to boot from.
+            The UUID or name of the Glance operating system image to boot from.
             """
     )
     @PluginProperty(group = "main")
@@ -151,62 +149,112 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     @PluginProperty(group = "advanced")
     private Property<List<String>> tags;
 
+    @Schema(
+        title = "Wait until server is active",
+        description = """
+            Whether to wait for the server to transition from `BUILD` to `ACTIVE` status. Defaults to `true`.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<Boolean> waitUntilComplete = Property.ofValue(true);
+
+    @Schema(
+        title = "Timeout duration",
+        description = """
+            Maximum duration to wait for the server to reach `ACTIVE` status. Defaults to 10 minutes.
+            """
+    )
+    @PluginProperty(group = "advanced")
+    @Builder.Default
+    private Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
+
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
+        var logger = runContext.logger();
 
-        String rName = runContext.render(this.name).as(String.class).orElseThrow();
-        String rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElseThrow();
-        String rImageRef = runContext.render(this.imageRef).as(String.class).orElse(null);
-        String rKeyName = runContext.render(this.keyName).as(String.class).orElse(null);
-        String rUserData = runContext.render(this.userData).as(String.class).orElse(null);
-        String rAdminPass = runContext.render(this.adminPass).as(String.class).orElse(null);
-        String rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
-        Map<String, String> rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
-        List<String> rTags = runContext.render(this.tags).asList(String.class);
+        var rName = runContext.render(this.name).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`name` is required for CreateServer"));
+        var rFlavorRef = runContext.render(this.flavorRef).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`flavorRef` is required for CreateServer"));
+        var rImageRef = runContext.render(this.imageRef).as(String.class).orElse(null);
+        var rKeyName = runContext.render(this.keyName).as(String.class).orElse(null);
+        var rUserData = runContext.render(this.userData).as(String.class).orElse(null);
+        var rAdminPass = runContext.render(this.adminPass).as(String.class).orElse(null);
+        var rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
+        var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
+        var rTags = runContext.render(this.tags).asList(String.class);
+        var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(true);
+        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
 
-        List<ServerPayloads.NetworkRef> networkRefs = null;
-        List<NetworkAttachment> rNetworks = runContext.render(this.networks).asList(NetworkAttachment.class);
-        if (rNetworks != null && !rNetworks.isEmpty()) {
-            networkRefs = new ArrayList<>();
-            for (NetworkAttachment net : rNetworks) {
-                networkRefs.add(ServerPayloads.NetworkRef.builder()
-                    .uuid(net.getUuid())
-                    .port(net.getPort())
-                    .fixedIp(net.getFixedIp())
-                    .tag(net.getTag())
-                    .build());
+        try (var client = this.createClient(runContext)) {
+            // Resolve names to IDs (Finding #4)
+            var resolvedFlavorId = client.resolveFlavorId(rFlavorRef);
+            var resolvedImageId = client.resolveImageId(rImageRef);
+
+            // Auto-base64 encode userData if plain text (Finding #3)
+            String encodedUserData = null;
+            if (rUserData != null && !rUserData.isBlank()) {
+                var trimmed = rUserData.trim();
+                boolean isAlreadyBase64 = false;
+                try {
+                    var decoded = Base64.getDecoder().decode(trimmed);
+                    isAlreadyBase64 = Base64.getEncoder().encodeToString(decoded).equals(trimmed.replaceAll("\\s+", ""));
+                } catch (Exception ignored) {
+                }
+                if (isAlreadyBase64) {
+                    encodedUserData = trimmed;
+                } else {
+                    encodedUserData = Base64.getEncoder().encodeToString(rUserData.getBytes(StandardCharsets.UTF_8));
+                }
             }
-        }
 
-        ServerPayloads.ServerData serverData = ServerPayloads.ServerData.builder()
-            .name(rName)
-            .flavorRef(rFlavorRef)
-            .imageRef(rImageRef)
-            .networks(networkRefs)
-            .keyName(rKeyName)
-            .userData(rUserData)
-            .metadata(rMetadata != null && !rMetadata.isEmpty() ? rMetadata : null)
-            .adminPass(rAdminPass)
-            .description(rDescription)
-            .tags(rTags != null && !rTags.isEmpty() ? rTags : null)
-            .build();
+            List<ServerPayloads.NetworkRef> networkRefs = null;
+            var rNetworks = runContext.render(this.networks).asList(NetworkAttachment.class);
+            if (rNetworks != null && !rNetworks.isEmpty()) {
+                networkRefs = new ArrayList<>();
+                for (var net : rNetworks) {
+                    var resolvedNetId = client.resolveNetworkId(net.getUuid());
+                    networkRefs.add(ServerPayloads.NetworkRef.builder()
+                        .uuid(resolvedNetId)
+                        .port(net.getPort())
+                        .fixedIp(net.getFixedIp())
+                        .tag(net.getTag())
+                        .build());
+                }
+            }
 
-        ServerPayloads.Create payload = ServerPayloads.Create.builder()
-            .server(serverData)
-            .build();
+            var serverData = ServerPayloads.ServerData.builder()
+                .name(rName)
+                .flavorRef(resolvedFlavorId)
+                .imageRef(resolvedImageId)
+                .networks(networkRefs)
+                .keyName(rKeyName)
+                .userData(encodedUserData)
+                .metadata(rMetadata != null && !rMetadata.isEmpty() ? rMetadata : null)
+                .adminPass(rAdminPass)
+                .description(rDescription)
+                .tags(rTags != null && !rTags.isEmpty() ? rTags : null)
+                .build();
 
-        logger.info("Creating OpenStack compute server '{}' with flavor '{}'...", rName, rFlavorRef);
+            var payload = ServerPayloads.Create.builder()
+                .server(serverData)
+                .build();
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            Server server = client.createServer(payload);
-            logger.info("Successfully requested server creation: id='{}', name='{}', status='{}'",
-                server.getId(), server.getName(), server.getStatus());
+            logger.info("Creating OpenStack compute server '{}' with flavor '{}'...", rName, resolvedFlavorId);
+            var server = client.createServer(payload);
+            logger.info("Created server: id='{}', name='{}', status='{}'", server.getId(), server.getName(), server.getStatus());
+
+            if (Boolean.TRUE.equals(rWait) && !"ACTIVE".equalsIgnoreCase(server.getStatus())) {
+                logger.info("Waiting for server '{}' to become ACTIVE (timeout: {})...", server.getId(), rTimeout);
+                server = client.waitForServerStatus(server.getId(), "ACTIVE", rTimeout, runContext);
+                logger.info("Server '{}' is now ACTIVE.", server.getId());
+            }
 
             return Output.builder()
-                .server(server)
                 .serverId(server.getId())
                 .status(server.getStatus())
+                .addresses(server.getAddresses())
                 .build();
         }
     }
@@ -218,9 +266,9 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     @AllArgsConstructor
     public static class NetworkAttachment {
         @Schema(
-            title = "Network UUID",
+            title = "Network UUID or Name",
             description = """
-                The UUID of the Neutron network to connect.
+                The UUID or name of the Neutron network to connect.
                 """
         )
         private String uuid;
@@ -254,14 +302,6 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
         @Schema(
-            title = "Created server representation",
-            description = """
-                Full details of the created OpenStack Nova server.
-                """
-        )
-        private final Server server;
-
-        @Schema(
             title = "Server UUID",
             description = """
                 The unique identifier of the created server.
@@ -272,9 +312,16 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         @Schema(
             title = "Server status",
             description = """
-                The initial status of the server (e.g. `BUILD` or `ACTIVE`).
+                The status of the server (e.g. `BUILD` or `ACTIVE`).
                 """
         )
         private final String status;
+        @Schema(
+            title = "IP addresses",
+            description = """
+                Network IP addresses assigned to the created server.
+                """
+        )
+        private final Map<String, List<Server.Address>> addresses;
     }
 }

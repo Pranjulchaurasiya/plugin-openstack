@@ -6,12 +6,10 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 @SuperBuilder
 @ToString
@@ -69,19 +67,22 @@ public class RestoreServerFromSnapshot extends AbstractComputeTask implements Ru
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-        String rImageId = runContext.render(this.imageId).as(String.class).orElseThrow();
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required for RestoreServerFromSnapshot"));
+        var rImageId = runContext.render(this.imageId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`imageId` is required for RestoreServerFromSnapshot"));
 
         logger.info("Restoring OpenStack server '{}' from snapshot image '{}'...", rServerId, rImageId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            client.restoreServer(rServerId, rImageId);
+        try (var client = this.createClient(runContext)) {
+            var resolvedImageId = client.resolveImageId(rImageId);
+            client.restoreServer(rServerId, resolvedImageId);
             logger.info("Successfully dispatched rebuild action for server '{}'.", rServerId);
 
             return Output.builder()
                 .serverId(rServerId)
-                .imageId(rImageId)
+                .imageId(resolvedImageId)
                 .build();
         }
     }
@@ -98,9 +99,9 @@ public class RestoreServerFromSnapshot extends AbstractComputeTask implements Ru
         private final String serverId;
 
         @Schema(
-            title = "Restored image UUID",
+            title = "Restored snapshot image UUID",
             description = """
-                The UUID of the snapshot image used for the rebuild.
+                The Glance image UUID used to rebuild the instance.
                 """
         )
         private final String imageId;

@@ -2,23 +2,28 @@ package io.kestra.plugin.openstack.compute;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import io.kestra.core.junit.annotations.KestraTest;
 import io.kestra.core.models.property.Property;
+import io.kestra.core.models.tasks.common.FetchType;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.serializers.JacksonMapper;
+import io.kestra.core.utils.IdUtils;
 import io.kestra.plugin.openstack.client.model.GlanceResponses;
+import io.kestra.plugin.openstack.client.model.RebootType;
 import io.kestra.plugin.openstack.client.model.Server;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 @KestraTest
 class OpenStackComputeTest {
@@ -50,7 +55,7 @@ class OpenStackComputeTest {
         wireMockServer.resetAll();
 
         // Stub Keystone v3 token authentication
-        String tokenBody = String.format("""
+        var tokenBody = String.format("""
             {
               "token": {
                 "expires_at": "2099-01-01T00:00:00.000000Z",
@@ -77,11 +82,22 @@ class OpenStackComputeTest {
                         "url": "http://localhost:%d/image/v2"
                       }
                     ]
+                  },
+                  {
+                    "type": "network",
+                    "name": "neutron",
+                    "endpoints": [
+                      {
+                        "interface": "public",
+                        "region": "RegionOne",
+                        "url": "http://localhost:%d/network/v2.0"
+                      }
+                    ]
                   }
                 ]
               }
             }
-            """, port, port);
+            """, port, port, port);
 
         wireMockServer.stubFor(post(urlEqualTo("/v3/auth/tokens"))
             .willReturn(aResponse()
@@ -89,13 +105,46 @@ class OpenStackComputeTest {
                 .withHeader("Content-Type", "application/json")
                 .withHeader("X-Subject-Token", "mock-openstack-token-xyz123")
                 .withBody(tokenBody)));
+
+        // Default stub for flavors detail
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/detail"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "flavors": [
+                        {"id": "flavor-m1-medium-id", "name": "m1.medium", "vcpus": 2, "ram": 4096, "disk": 40},
+                        {"id": "flavor-m1-large-id", "name": "m1.large", "vcpus": 4, "ram": 8192, "disk": 80}
+                      ]
+                    }
+                    """)));
+
+        // Default stub for Glance image resolution by name
+        wireMockServer.stubFor(get(urlPathEqualTo("/image/v2/images"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                    {
+                      "images": [
+                        {"id": "img-ubuntu-2204-id", "name": "ubuntu-22.04", "status": "active"}
+                      ]
+                    }
+                    """)));
     }
 
     @Test
-    void testCreateServerWithAppCredentials() throws Exception {
+    void testCreateServerWithAppCredentialsAndUserDataBase64() throws Exception {
+        var plainUserData = "#!/bin/bash\necho 'Configuring Kestra worker node'\n";
+        var expectedBase64 = Base64.getEncoder().encodeToString(plainUserData.getBytes());
+
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers"))
             .withHeader("X-Auth-Token", equalTo("mock-openstack-token-xyz123"))
             .withHeader("OpenStack-API-Version", equalTo("compute 2.58"))
+            .withRequestBody(matchingJsonPath("$.server.user_data", equalTo(expectedBase64)))
+            .withRequestBody(matchingJsonPath("$.server.flavorRef", equalTo("flavor-m1-medium-id")))
+            .withRequestBody(matchingJsonPath("$.server.imageRef", equalTo("img-ubuntu-2204-id")))
             .willReturn(aResponse()
                 .withStatus(202)
                 .withHeader("Content-Type", "application/json")
@@ -104,28 +153,31 @@ class OpenStackComputeTest {
                       "server": {
                         "id": "srv-9a2f-test-01",
                         "name": "kestra-worker-01",
-                        "status": "BUILD",
+                        "status": "ACTIVE",
                         "adminPass": "GeneratedAdminPass123"
                       }
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        CreateServer task = CreateServer.builder()
+        var task = CreateServer.builder()
+            .id("create_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .name(Property.ofValue("kestra-worker-01"))
             .flavorRef(Property.ofValue("m1.medium"))
             .imageRef(Property.ofValue("ubuntu-22.04"))
+            .userData(Property.ofValue(plainUserData))
+            .waitUntilComplete(Property.ofValue(false))
             .build();
 
-        CreateServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-9a2f-test-01"));
-        assertThat(output.getStatus(), is("BUILD"));
+        assertThat(output.getStatus(), is("ACTIVE"));
         assertThat(JacksonMapper.ofJson().writeValueAsString(output), not(containsString("GeneratedAdminPass123")));
     }
 
@@ -145,18 +197,20 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        CreateServer task = CreateServer.builder()
+        var task = CreateServer.builder()
+            .id("create_server_pass_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .username(Property.ofValue("devuser"))
             .password(Property.ofValue("secretpassword"))
             .projectName(Property.ofValue("platform"))
             .name(Property.ofValue("kestra-worker-02"))
             .flavorRef(Property.ofValue("m1.large"))
+            .waitUntilComplete(Property.ofValue(false))
             .build();
 
-        CreateServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-9a2f-test-02"));
@@ -164,7 +218,7 @@ class OpenStackComputeTest {
     }
 
     @Test
-    void testListServersWithRegex() throws Exception {
+    void testListServersWithRegexAndFetchModes() throws Exception {
         wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/detail"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -191,21 +245,49 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        ListServers task = ListServers.builder()
+        // 1. FETCH mode with regex
+        var fetchTask = ListServers.builder()
+            .id("list_servers_fetch_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .nameRegex(Property.ofValue("prod-.*"))
+            .fetchType(Property.ofValue(FetchType.FETCH))
             .build();
 
-        ListServers.Output output = task.run(runContext);
+        var fetchOut = fetchTask.run(runContext);
+        assertNotNull(fetchOut);
+        assertThat(fetchOut.getSize(), is(2));
+        assertThat(fetchOut.getServers().getFirst().getName(), is("prod-app-01"));
 
-        assertNotNull(output);
-        assertThat(output.getSize(), is(2));
-        assertThat(output.getServers().get(0).getName(), is("prod-app-01"));
-        assertThat(output.getServers().get(1).getName(), is("prod-db-01"));
+        // 2. FETCH_ONE mode
+        var fetchOneTask = ListServers.builder()
+            .id("list_servers_one_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .nameRegex(Property.ofValue("prod-.*"))
+            .fetchType(Property.ofValue(FetchType.FETCH_ONE))
+            .build();
+
+        var oneOut = fetchOneTask.run(runContext);
+        assertNotNull(oneOut.getServer());
+        assertThat(oneOut.getServer().getName(), is("prod-app-01"));
+
+        // 3. STORE mode
+        var storeTask = ListServers.builder()
+            .id("list_servers_store_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .fetchType(Property.ofValue(FetchType.STORE))
+            .build();
+
+        var storeOut = storeTask.run(runContext);
+        assertNotNull(storeOut.getUri());
+        assertThat(storeOut.getSize(), is(3));
     }
 
     @Test
@@ -214,16 +296,17 @@ class OpenStackComputeTest {
             .withRequestBody(equalToJson("{\"os-start\": null}"))
             .willReturn(aResponse().withStatus(202)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        StartServer task = StartServer.builder()
+        var task = StartServer.builder()
+            .id("start_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
 
-        StartServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-01"));
@@ -235,42 +318,44 @@ class OpenStackComputeTest {
             .withRequestBody(equalToJson("{\"os-stop\": null}"))
             .willReturn(aResponse().withStatus(202)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        StopServer task = StopServer.builder()
+        var task = StopServer.builder()
+            .id("stop_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
 
-        StopServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-01"));
     }
 
     @Test
-    void testRebootServer() throws Exception {
+    void testRebootServerWithEnum() throws Exception {
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
             .withRequestBody(equalToJson("{\"reboot\": {\"type\": \"HARD\"}}"))
             .willReturn(aResponse().withStatus(202)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        RebootServer task = RebootServer.builder()
+        var task = RebootServer.builder()
+            .id("reboot_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
-            .rebootType(Property.ofValue("HARD"))
+            .rebootType(Property.ofValue(RebootType.HARD))
             .build();
 
-        RebootServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-01"));
-        assertThat(output.getType(), is("HARD"));
+        assertThat(output.getRebootType(), is(RebootType.HARD));
     }
 
     @Test
@@ -279,16 +364,17 @@ class OpenStackComputeTest {
             .withRequestBody(equalToJson("{\"reboot\": {\"type\": \"HARD\"}}"))
             .willReturn(aResponse().withStatus(202)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        ResetServer task = ResetServer.builder()
+        var task = ResetServer.builder()
+            .id("reset_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
 
-        ResetServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-01"));
@@ -304,24 +390,26 @@ class OpenStackComputeTest {
             .withRequestBody(equalToJson("{\"resume\": null}"))
             .willReturn(aResponse().withStatus(202)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        SuspendServer suspendTask = SuspendServer.builder()
+        var suspendTask = SuspendServer.builder()
+            .id("suspend_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
-        SuspendServer.Output suspendOut = suspendTask.run(runContext);
+        var suspendOut = suspendTask.run(runContext);
         assertThat(suspendOut.getServerId(), is("srv-01"));
 
-        ResumeServer resumeTask = ResumeServer.builder()
+        var resumeTask = ResumeServer.builder()
+            .id("resume_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
-        ResumeServer.Output resumeOut = resumeTask.run(runContext);
+        var resumeOut = resumeTask.run(runContext);
         assertThat(resumeOut.getServerId(), is("srv-01"));
     }
 
@@ -330,16 +418,17 @@ class OpenStackComputeTest {
         wireMockServer.stubFor(delete(urlEqualTo("/compute/v2.1/servers/srv-01"))
             .willReturn(aResponse().withStatus(204)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        DeleteServer task = DeleteServer.builder()
+        var task = DeleteServer.builder()
+            .id("delete_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
 
-        DeleteServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("srv-01"));
@@ -360,16 +449,17 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        GetServerMetadata task = GetServerMetadata.builder()
+        var task = GetServerMetadata.builder()
+            .id("get_meta_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
 
-        GetServerMetadata.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getMetadata().get("environment"), is("staging"));
@@ -387,14 +477,16 @@ class OpenStackComputeTest {
                       "server": {
                         "id": "srv-01",
                         "name": "new-server-name",
+                        "status": "ACTIVE",
                         "description": "Updated description"
                       }
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        UpdateServer task = UpdateServer.builder()
+        var task = UpdateServer.builder()
+            .id("update_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
@@ -403,11 +495,11 @@ class OpenStackComputeTest {
             .serverDescription(Property.ofValue("Updated description"))
             .build();
 
-        UpdateServer.Output output = task.run(runContext);
+        var output = task.run(runContext);
 
         assertNotNull(output);
-        assertThat(output.getName(), is("new-server-name"));
         assertThat(output.getServerId(), is("srv-01"));
+        assertThat(output.getStatus(), is("ACTIVE"));
     }
 
     @Test
@@ -448,54 +540,58 @@ class OpenStackComputeTest {
         wireMockServer.stubFor(delete(urlEqualTo("/image/v2/images/snap-image-uuid-123"))
             .willReturn(aResponse().withStatus(204)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
         // 1. Create snapshot
-        CreateServerSnapshot createSnap = CreateServerSnapshot.builder()
+        var createSnap = CreateServerSnapshot.builder()
+            .id("create_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .name(Property.ofValue("backup-2026"))
             .build();
-        CreateServerSnapshot.Output createSnapOut = createSnap.run(runContext);
+        var createSnapOut = createSnap.run(runContext);
         assertThat(createSnapOut.getImageId(), is("snap-image-uuid-123"));
 
         // 2. List snapshots
-        ListServerSnapshots listSnap = ListServerSnapshots.builder()
+        var listSnap = ListServerSnapshots.builder()
+            .id("list_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .build();
-        ListServerSnapshots.Output listSnapOut = listSnap.run(runContext);
+        var listSnapOut = listSnap.run(runContext);
         assertThat(listSnapOut.getSize(), is(1));
-        assertThat(listSnapOut.getSnapshots().get(0).getId(), is("snap-image-uuid-123"));
+        assertThat(listSnapOut.getSnapshots().getFirst().getId(), is("snap-image-uuid-123"));
 
         // 3. Restore snapshot
-        RestoreServerFromSnapshot restore = RestoreServerFromSnapshot.builder()
+        var restore = RestoreServerFromSnapshot.builder()
+            .id("restore_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .serverId(Property.ofValue("srv-01"))
             .imageId(Property.ofValue("snap-image-uuid-123"))
             .build();
-        RestoreServerFromSnapshot.Output restoreOut = restore.run(runContext);
+        var restoreOut = restore.run(runContext);
         assertThat(restoreOut.getImageId(), is("snap-image-uuid-123"));
 
         // 4. Delete snapshot
-        DeleteServerSnapshot deleteSnap = DeleteServerSnapshot.builder()
+        var deleteSnap = DeleteServerSnapshot.builder()
+            .id("del_snap_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
             .imageId(Property.ofValue("snap-image-uuid-123"))
             .build();
-        DeleteServerSnapshot.Output deleteSnapOut = deleteSnap.run(runContext);
+        var deleteSnapOut = deleteSnap.run(runContext);
         assertThat(deleteSnapOut.getImageId(), is("snap-image-uuid-123"));
     }
 
     @Test
-    void testCloneServer() throws Exception {
+    void testCloneServerWithImageStatusTransition() throws Exception {
         // Source server details
         wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/source-srv-01"))
             .willReturn(aResponse()
@@ -506,7 +602,7 @@ class OpenStackComputeTest {
                       "server": {
                         "id": "source-srv-01",
                         "name": "original-server",
-                        "flavor": {"id": "m1.medium"}
+                        "flavor": {"id": "flavor-m1-medium-id"}
                       }
                     }
                     """)));
@@ -519,6 +615,24 @@ class OpenStackComputeTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"image_id\": \"snap-clone-image-1\"}")));
 
+        // Snapshot transitions queued -> active via WireMock Scenario
+        wireMockServer.stubFor(get(urlEqualTo("/image/v2/images/snap-clone-image-1"))
+            .inScenario("SnapshotStatusTransition")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"id\": \"snap-clone-image-1\", \"status\": \"queued\"}"))
+            .willSetStateTo("ImageActive"));
+
+        wireMockServer.stubFor(get(urlEqualTo("/image/v2/images/snap-clone-image-1"))
+            .inScenario("SnapshotStatusTransition")
+            .whenScenarioStateIs("ImageActive")
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"id\": \"snap-clone-image-1\", \"status\": \"active\"}")));
+
         // Provision new server from snapshot
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers"))
             .willReturn(aResponse()
@@ -529,14 +643,15 @@ class OpenStackComputeTest {
                       "server": {
                         "id": "clone-srv-01",
                         "name": "cloned-server-01",
-                        "status": "BUILD"
+                        "status": "ACTIVE"
                       }
                     }
                     """)));
 
-        RunContext runContext = runContextFactory.of();
+        var runContext = runContextFactory.of();
 
-        CloneServer cloneTask = CloneServer.builder()
+        var cloneTask = CloneServer.builder()
+            .id("clone_server_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .applicationCredentialId(Property.ofValue("app-cred-id"))
             .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
@@ -544,11 +659,111 @@ class OpenStackComputeTest {
             .name(Property.ofValue("cloned-server-01"))
             .build();
 
-        CloneServer.Output output = cloneTask.run(runContext);
+        var output = cloneTask.run(runContext);
 
         assertNotNull(output);
         assertThat(output.getServerId(), is("clone-srv-01"));
         assertThat(output.getSourceServerId(), is("source-srv-01"));
         assertThat(output.getSnapshotImageId(), is("snap-clone-image-1"));
+    }
+
+    @Test
+    void testKeystone401Unauthorized() {
+        wireMockServer.stubFor(post(urlEqualTo("/v3/auth/tokens"))
+            .willReturn(aResponse()
+                .withStatus(401)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"error\": {\"message\": \"Invalid user or application credentials\"}}")));
+
+        var runContext = runContextFactory.of();
+
+        var task = ListServers.builder()
+            .id("unauthorized_task_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("bad-id"))
+            .applicationCredentialSecret(Property.ofValue("bad-secret"))
+            .build();
+
+        var exception = assertThrows(IllegalStateException.class, () -> task.run(runContext));
+        assertThat(exception.getMessage(), containsString("OpenStack authentication/authorization failed (HTTP 401)"));
+    }
+
+    @Test
+    void testServer404NotFound() {
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/non-existent-srv"))
+            .willReturn(aResponse()
+                .withStatus(404)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"itemNotFound\": {\"message\": \"Server not found\"}}")));
+
+        var runContext = runContextFactory.of();
+
+        var task = GetServerMetadata.builder()
+            .id("not_found_task_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("non-existent-srv"))
+            .build();
+
+        var exception = assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
+        assertThat(exception.getMessage(), containsString("OpenStack resource not found (HTTP 404)"));
+    }
+
+    @Test
+    void testEmptyResponseBodyThrowsDescriptiveError() {
+        wireMockServer.stubFor(get(urlPathEqualTo("/compute/v2.1/servers/detail"))
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("")));
+
+        var runContext = runContextFactory.of();
+
+        var task = ListServers.builder()
+            .id("empty_body_task_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .build();
+
+        var exception = assertThrows(IllegalStateException.class, () -> task.run(runContext));
+        assertThat(exception.getMessage(), containsString("Empty response body received from OpenStack API"));
+    }
+
+    @Test
+    void testMissingCredentialsThrowsIllegalArgumentException() {
+        var runContext = runContextFactory.of();
+
+        var task = ListServers.builder()
+            .id("missing_creds_task_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .build();
+
+        var exception = assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
+        assertThat(exception.getMessage(), containsString("Missing credentials"));
+    }
+
+    @Test
+    void testPebbleVariableRendering() throws Exception {
+        wireMockServer.stubFor(delete(urlEqualTo("/compute/v2.1/servers/dyn-srv-999"))
+            .willReturn(aResponse().withStatus(204)));
+
+        var runContext = runContextFactory.of(Map.of(
+            "myAuthUrl", authUrl,
+            "myServerId", "dyn-srv-999"
+        ));
+
+        var task = DeleteServer.builder()
+            .id("pebble_render_task_" + IdUtils.create())
+            .authUrl(Property.ofExpression("{{ myAuthUrl }}"))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofExpression("{{ myServerId }}"))
+            .build();
+
+        var output = task.run(runContext);
+        assertNotNull(output);
+        assertThat(output.getServerId(), is("dyn-srv-999"));
     }
 }

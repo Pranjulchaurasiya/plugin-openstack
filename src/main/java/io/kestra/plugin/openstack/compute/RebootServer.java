@@ -6,12 +6,11 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
+import io.kestra.plugin.openstack.client.model.RebootType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 @SuperBuilder
 @ToString
@@ -65,23 +64,24 @@ public class RebootServer extends AbstractComputeTask implements RunnableTask<Re
     )
     @PluginProperty(group = "main")
     @Builder.Default
-    private Property<String> rebootType = Property.ofValue("SOFT");
+    private Property<RebootType> rebootType = Property.ofValue(RebootType.SOFT);
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-        String rType = runContext.render(this.rebootType).as(String.class).orElse("SOFT");
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required"));
+        var rType = runContext.render(this.rebootType).as(RebootType.class).orElse(RebootType.SOFT);
 
         logger.info("Rebooting OpenStack server '{}' (type: {})...", rServerId, rType);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            client.rebootServer(rServerId, rType);
+        try (var client = this.createClient(runContext)) {
+            client.rebootServer(rServerId, rType.getValue());
             logger.info("Successfully dispatched reboot action for server '{}'.", rServerId);
 
             return Output.builder()
                 .serverId(rServerId)
-                .type(rType)
+                .rebootType(rType)
                 .build();
         }
     }
@@ -98,11 +98,11 @@ public class RebootServer extends AbstractComputeTask implements RunnableTask<Re
         private final String serverId;
 
         @Schema(
-            title = "Reboot type executed",
+            title = "Reboot type",
             description = """
-                The reboot type (`SOFT` or `HARD`).
+                The reboot type dispatched to the instance (`SOFT` or `HARD`).
                 """
         )
-        private final String type;
+        private final RebootType rebootType;
     }
 }

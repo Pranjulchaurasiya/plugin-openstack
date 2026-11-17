@@ -6,12 +6,10 @@ import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.RunContext;
-import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
-import org.slf4j.Logger;
 
 import java.util.Map;
 
@@ -80,15 +78,17 @@ public class CreateServerSnapshot extends AbstractComputeTask implements Runnabl
 
     @Override
     public Output run(RunContext runContext) throws Exception {
-        Logger logger = runContext.logger();
-        String rServerId = runContext.render(this.serverId).as(String.class).orElseThrow();
-        String rName = runContext.render(this.name).as(String.class).orElseThrow();
-        Map<String, String> rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
+        var logger = runContext.logger();
+        var rServerId = runContext.render(this.serverId).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`serverId` is required for CreateServerSnapshot"));
+        var rName = runContext.render(this.name).as(String.class)
+            .orElseThrow(() -> new IllegalArgumentException("`name` is required for CreateServerSnapshot"));
+        var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
 
         logger.info("Creating snapshot '{}' for OpenStack server '{}'...", rName, rServerId);
 
-        try (OpenStackClient client = this.createClient(runContext)) {
-            String imageId = client.createSnapshot(rServerId, rName, rMetadata);
+        try (var client = this.createClient(runContext)) {
+            var imageId = client.createSnapshot(rServerId, rName, rMetadata);
             logger.info("Snapshot action dispatched. Returned image UUID: '{}'", imageId);
 
             return Output.builder()

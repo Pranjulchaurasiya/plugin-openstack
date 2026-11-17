@@ -162,7 +162,8 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     @Schema(
         title = "Timeout duration",
         description = """
-            Maximum duration to wait for the server to reach `ACTIVE` status. Defaults to 10 minutes.
+            Maximum duration to wait for the server to reach `ACTIVE` status when `waitUntilComplete` is true.
+            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -186,6 +187,9 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         var rTags = runContext.render(this.tags).asList(String.class);
         var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(true);
         var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
+        if (rTimeout.isNegative() || rTimeout.isZero()) {
+            throw new IllegalArgumentException("`timeout` must be a positive duration");
+        }
 
         try (var client = this.createClient(runContext)) {
             var resolvedFlavorId = client.resolveFlavorId(rFlavorRef);

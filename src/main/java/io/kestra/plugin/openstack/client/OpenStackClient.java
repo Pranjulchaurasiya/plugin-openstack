@@ -616,12 +616,34 @@ public class OpenStackClient implements Closeable {
         throw new IllegalArgumentException("OpenStack network not found: '" + networkNameOrId + "'");
     }
 
-    public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout, RunContext runContext) throws Exception {
+    @FunctionalInterface
+    private interface ConditionSupplier<T> {
+        T get() throws Exception;
+    }
+
+    private <T> T pollUntil(Duration timeout, String timeoutMessage, ConditionSupplier<T> supplier) throws Exception {
         var start = Instant.now();
         var limit = timeout != null ? timeout : Duration.ofMinutes(10);
         long sleepMs = 1000;
 
         while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+            var result = supplier.get();
+            if (result != null) {
+                return result;
+            }
+            try {
+                Thread.sleep(sleepMs);
+                sleepMs = Math.min(sleepMs + 1000, 5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while polling", e);
+            }
+        }
+        throw new IllegalStateException(timeoutMessage + " (limit: " + limit + ").");
+    }
+
+    public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout, RunContext runContext) throws Exception {
+        return pollUntil(timeout, "Timed out waiting for snapshot image '" + imageId + "' to become active", () -> {
             var img = getImage(imageId);
             var status = img != null ? img.getStatus() : null;
             if ("active".equalsIgnoreCase(status)) {
@@ -630,23 +652,12 @@ public class OpenStackClient implements Closeable {
             if ("killed".equalsIgnoreCase(status) || "deleted".equalsIgnoreCase(status)) {
                 throw new IllegalStateException("Snapshot image '" + imageId + "' entered failure status: " + status);
             }
-            try {
-                Thread.sleep(sleepMs);
-                sleepMs = Math.min(sleepMs + 1000, 5000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while polling image active status", e);
-            }
-        }
-        throw new IllegalStateException("Timed out waiting for snapshot image '" + imageId + "' to become active (limit: " + limit + ").");
+            return null;
+        });
     }
 
     public Server waitForServerStatus(String serverId, String targetStatus, Duration timeout, RunContext runContext) throws Exception {
-        var start = Instant.now();
-        var limit = timeout != null ? timeout : Duration.ofMinutes(10);
-        long sleepMs = 1000;
-
-        while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+        return pollUntil(timeout, "Timed out waiting for server '" + serverId + "' to reach status '" + targetStatus + "'", () -> {
             var srv = getServer(serverId);
             var status = srv.getStatus();
             if (targetStatus.equalsIgnoreCase(status)) {
@@ -655,43 +666,25 @@ public class OpenStackClient implements Closeable {
             if ("ERROR".equalsIgnoreCase(status)) {
                 throw new IllegalStateException("Server '" + serverId + "' entered ERROR status.");
             }
-            try {
-                Thread.sleep(sleepMs);
-                sleepMs = Math.min(sleepMs + 1000, 5000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while polling server status", e);
-            }
-        }
-        throw new IllegalStateException("Timed out waiting for server '" + serverId + "' to reach status '" + targetStatus + "' (limit: " + limit + ").");
+            return null;
+        });
     }
 
     public void waitForServerDeletion(String serverId, Duration timeout, RunContext runContext) throws Exception {
-        var start = Instant.now();
-        var limit = timeout != null ? timeout : Duration.ofMinutes(10);
-        long sleepMs = 1000;
-
-        while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+        pollUntil(timeout, "Timed out waiting for server '" + serverId + "' to be deleted", () -> {
             try {
                 var srv = getServer(serverId);
                 if (srv == null || "DELETED".equalsIgnoreCase(srv.getStatus())) {
-                    return;
+                    return Boolean.TRUE;
                 }
             } catch (IllegalArgumentException e) {
                 if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
-                    return;
+                    return Boolean.TRUE;
                 }
                 throw e;
             }
-            try {
-                Thread.sleep(sleepMs);
-                sleepMs = Math.min(sleepMs + 1000, 5000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while waiting for server deletion", e);
-            }
-        }
-        throw new IllegalStateException("Timed out waiting for server '" + serverId + "' to be deleted (limit: " + limit + ").");
+            return null;
+        });
     }
 
     public List<InstanceActionResponses.InstanceAction> listInstanceActions(String serverId, String changesSince) throws Exception {

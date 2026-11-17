@@ -13,6 +13,7 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
 import java.time.Duration;
+import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -145,7 +146,6 @@ class OpenStackTriggerTest {
         assertThat(events.getFirst().get("eventType"), is("stop"));
         assertThat(events.getFirst().get("requestId"), is("req-stop-9988"));
 
-        // Second consecutive poll should deduplicate and return empty
         var secondPoll = trigger.evaluate(context.getKey(), context.getValue());
         assertTrue(secondPoll.isEmpty(), "Second consecutive poll without new events must return empty.");
     }
@@ -213,13 +213,13 @@ class OpenStackTriggerTest {
     @Test
     void testTriggerNextEvaluationDate() {
         var trigger = Trigger.builder()
-            .id("trigger_sched")
+            .id("trigger_sched_" + IdUtils.create())
             .authUrl(Property.ofValue(authUrl))
             .interval(Duration.ofMinutes(2))
             .build();
 
         var next = trigger.nextEvaluationDate();
         assertNotNull(next);
-        assertTrue(next.isAfter(java.time.ZonedDateTime.now().minusSeconds(1)));
+        assertTrue(next.isAfter(ZonedDateTime.now().minusSeconds(1)));
     }
 }

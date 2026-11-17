@@ -55,7 +55,6 @@ class OpenStackComputeTest {
     void setupStubs() {
         wireMockServer.resetAll();
 
-        // Stub Keystone v3 token authentication
         var tokenBody = String.format("""
             {
               "token": {
@@ -107,7 +106,6 @@ class OpenStackComputeTest {
                 .withHeader("X-Subject-Token", "mock-openstack-token-xyz123")
                 .withBody(tokenBody)));
 
-        // Default stub for flavors detail
         wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/detail"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -121,7 +119,6 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        // Default stub for Glance image resolution by name
         wireMockServer.stubFor(get(urlPathEqualTo("/image/v2/images"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -535,7 +532,6 @@ class OpenStackComputeTest {
 
     @Test
     void testSnapshotLifecycle() throws Exception {
-        // Create Snapshot
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
             .withRequestBody(containing("createImage"))
             .willReturn(aResponse()
@@ -543,7 +539,6 @@ class OpenStackComputeTest {
                 .withHeader("Content-Type", "application/json")
                 .withBody("{\"image_id\": \"snap-image-uuid-123\"}")));
 
-        // List Snapshots (Glance)
         wireMockServer.stubFor(get(urlPathEqualTo("/image/v2/images"))
             .willReturn(aResponse()
                 .withStatus(200)
@@ -562,12 +557,10 @@ class OpenStackComputeTest {
                     }
                     """)));
 
-        // Restore / Rebuild
         wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/srv-01/action"))
             .withRequestBody(equalToJson("{\"rebuild\": {\"imageRef\": \"snap-image-uuid-123\"}}"))
             .willReturn(aResponse().withStatus(202)));
 
-        // Delete Snapshot (Glance)
         wireMockServer.stubFor(delete(urlEqualTo("/image/v2/images/snap-image-uuid-123"))
             .willReturn(aResponse().withStatus(204)));
 

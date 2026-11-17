@@ -83,17 +83,13 @@ public class Trigger extends AbstractTrigger
     @EqualsAndHashCode.Exclude
     private Property<String> applicationCredentialSecret;
 
-    @Schema(
-        title = "OpenStack username",
-        description = """
+    @Schema(title = "OpenStack username", description = """
             The username for OpenStack password-based authentication.
             """)
     @PluginProperty(group = "connection")
     private Property<String> username;
 
-    @Schema(
-        title = "OpenStack password",
-        description = """
+    @Schema(title = "OpenStack password", description = """
             The password for OpenStack password-based authentication.
             """)
     @PluginProperty(group = "connection", secret = true)
@@ -101,60 +97,46 @@ public class Trigger extends AbstractTrigger
     @EqualsAndHashCode.Exclude
     private Property<String> password;
 
-    @Schema(
-        title = "Target project name",
-        description = """
+    @Schema(title = "Target project name", description = """
             The OpenStack project/tenant name to scope authentication to when using password credentials.
             """)
     @PluginProperty(group = "connection")
     private Property<String> projectName;
 
-    @Schema(
-        title = "User domain name",
-        description = """
+    @Schema(title = "User domain name", description = """
             The domain name for the user when using password credentials. Defaults to `Default`.
             """)
     @PluginProperty(group = "connection")
     @Builder.Default
     private Property<String> userDomainName = Property.ofValue("Default");
 
-    @Schema(
-        title = "Project domain name",
-        description = """
+    @Schema(title = "Project domain name", description = """
             The domain name for the project when using password credentials. Defaults to `Default`.
             """)
     @PluginProperty(group = "connection")
     @Builder.Default
     private Property<String> projectDomainName = Property.ofValue("Default");
 
-    @Schema(
-        title = "Region name",
-        description = """
+    @Schema(title = "Region name", description = """
             The OpenStack region to target in the service catalog (e.g. `RegionOne`).
             """)
     @PluginProperty(group = "connection")
     private Property<String> region;
 
-    @Schema(
-        title = "Endpoint interface type",
-        description = """
+    @Schema(title = "Endpoint interface type", description = """
             The endpoint interface type to resolve from the service catalog: `PUBLIC`, `INTERNAL`, or `ADMIN`. Defaults to `PUBLIC`.
             """)
     @PluginProperty(group = "connection")
     @Builder.Default
     private Property<EndpointType> endpointType = Property.ofValue(EndpointType.PUBLIC);
 
-    @Schema(
-        title = "HTTP client options",
-        description = """
+    @Schema(title = "HTTP client options", description = """
             Advanced HTTP client configuration such as timeouts and proxy settings.
             """)
     @PluginProperty(group = "connection")
     private HttpConfiguration options;
 
-    @Schema(
-        title = "Interval between evaluations",
-        description = """
+    @Schema(title = "Interval between evaluations", description = """
             The duration between each poll evaluation. Defaults to 1 minute (`PT1M`).
             """)
     @PluginProperty(group = "advanced")
@@ -312,12 +294,6 @@ public class Trigger extends AbstractTrigger
                 if (srv.getUpdated() != null
                         && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
                     latestTimestamp = srv.getUpdated();
-                    newDeliveredIds.clear();
-                    for (var ev : events) {
-                        var id = ev.getRequestId() != null ? ev.getRequestId()
-                                : (ev.getServerId() + "_" + ev.getEventType());
-                        newDeliveredIds.add(id);
-                    }
                 }
             }
 
@@ -386,7 +362,6 @@ public class Trigger extends AbstractTrigger
             default -> false;
         };
     }
-
 
     @Getter
     @Builder

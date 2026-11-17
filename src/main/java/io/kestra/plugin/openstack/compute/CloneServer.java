@@ -112,7 +112,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         title = "Timeout for cloning lifecycle operations",
         description = """
             Maximum time to wait for the snapshot to become active and for the cloned server to reach `ACTIVE` status.
-            Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -130,6 +130,9 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         var rSnapshotName = runContext.render(this.snapshotName).as(String.class).orElse(rName + "-snapshot");
         var rDeleteSnap = runContext.render(this.deleteSnapshotAfterClone).as(Boolean.class).orElse(false);
         var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
+        if (rTimeout.isNegative() || rTimeout.isZero()) {
+            throw new IllegalArgumentException("`timeout` must be a positive duration");
+        }
         var rNetworks = runContext.render(this.networks).asList(CreateServer.NetworkAttachment.class);
 
         logger.info("Cloning OpenStack server '{}' to new server '{}'...", rSourceServerId, rName);

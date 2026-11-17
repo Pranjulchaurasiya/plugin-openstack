@@ -103,7 +103,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         title = "Timeout for resize operations",
         description = """
             Maximum time to wait for the server to reach `VERIFY_RESIZE` and then `ACTIVE`.
-            Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -138,6 +138,9 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rAutoConfirm = runContext.render(this.autoConfirmResize).as(Boolean.class).orElse(true);
         var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
+        if (rTimeout.isNegative() || rTimeout.isZero()) {
+            throw new IllegalArgumentException("`timeout` must be a positive duration");
+        }
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rNetworkId = runContext.render(this.networkId).as(String.class).orElse(null);
 

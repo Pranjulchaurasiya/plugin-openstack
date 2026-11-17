@@ -3,6 +3,7 @@ package io.kestra.plugin.openstack.compute;
 import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
+import io.kestra.core.models.tasks.VoidOutput;
 import io.kestra.core.runners.RunContext;
 import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -21,7 +22,7 @@ import java.time.Duration;
 @EqualsAndHashCode
 @Getter
 @NoArgsConstructor
-public abstract class AbstractServerActionTask extends AbstractComputeTask implements RunnableTask<AbstractServerActionTask.Output> {
+public abstract class AbstractServerActionTask extends AbstractComputeTask implements RunnableTask<VoidOutput> {
 
     @NotNull
     @Schema(
@@ -56,7 +57,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
     protected Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Override
-    public Output run(RunContext runContext) throws Exception {
+    public VoidOutput run(RunContext runContext) throws Exception {
         var logger = runContext.logger();
         var rServerId = runContext.render(this.serverId).as(String.class)
             .orElseThrow(() -> new IllegalArgumentException("`serverId` is required"));
@@ -69,12 +70,11 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
             executeAction(client, rServerId, runContext);
             logger.info("Successfully executed {} for server '{}'.", actionName(), rServerId);
 
-            if (Boolean.TRUE.equals(rWait) && expectedStatus() != null) {
-                logger.info("Waiting for server '{}' to reach status '{}'...", rServerId, expectedStatus());
-                client.waitForServerStatus(rServerId, expectedStatus(), rTimeout, runContext);
+            if (Boolean.TRUE.equals(rWait)) {
+                waitForCompletion(client, rServerId, rTimeout, runContext);
             }
 
-            return Output.builder().build();
+            return null;
         }
     }
 
@@ -86,8 +86,10 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
         return null;
     }
 
-    @Getter
-    @Builder
-    public static class Output implements io.kestra.core.models.tasks.Output {
+    protected void waitForCompletion(OpenStackClient client, String serverId, Duration timeout, RunContext runContext) throws Exception {
+        if (expectedStatus() != null) {
+            runContext.logger().info("Waiting for server '{}' to reach status '{}'...", serverId, expectedStatus());
+            client.waitForServerStatus(serverId, expectedStatus(), timeout, runContext);
+        }
     }
 }

@@ -5,10 +5,10 @@ import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.models.tasks.RunnableTask;
+import io.kestra.core.models.tasks.VoidOutput;
 import io.kestra.core.runners.RunContext;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
-import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -29,7 +29,7 @@ import lombok.experimental.SuperBuilder;
 @Plugin(
     examples = {
         @Example(
-            title = "Delete a server snapshot image",
+            title = "Delete an OpenStack server snapshot image",
             full = true,
             code = """
                 id: delete_openstack_snapshot
@@ -46,7 +46,7 @@ import lombok.experimental.SuperBuilder;
         )
     }
 )
-public class DeleteServerSnapshot extends AbstractComputeTask implements RunnableTask<DeleteServerSnapshot.Output> {
+public class DeleteServerSnapshot extends AbstractComputeTask implements RunnableTask<VoidOutput> {
 
     @NotNull
     @Schema(
@@ -59,7 +59,7 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
     private Property<String> imageId;
 
     @Override
-    public Output run(RunContext runContext) throws Exception {
+    public VoidOutput run(RunContext runContext) throws Exception {
         var logger = runContext.logger();
         var rImageId = runContext.render(this.imageId).as(String.class)
             .orElseThrow(() -> new IllegalArgumentException("`imageId` is required for DeleteServerSnapshot"));
@@ -71,21 +71,7 @@ public class DeleteServerSnapshot extends AbstractComputeTask implements Runnabl
             client.deleteSnapshot(targetImageId);
             logger.info("Successfully deleted snapshot image '{}'.", targetImageId);
 
-            return Output.builder()
-                .deleted(true)
-                .build();
+            return null;
         }
-    }
-
-    @Getter
-    @Builder
-    public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(
-            title = "Deletion success",
-            description = """
-                Whether the snapshot image was successfully deleted.
-                """
-        )
-        private final Boolean deleted;
     }
 }

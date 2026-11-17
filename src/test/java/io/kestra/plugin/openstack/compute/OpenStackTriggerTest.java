@@ -20,6 +20,7 @@ import java.util.Optional;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -127,7 +128,7 @@ class OpenStackTriggerTest {
             .status(Property.ofValue("SHUTOFF"))
             .serverNameRegex(Property.ofValue("prod-.*"))
             .eventType(Property.ofValue(EventType.STOP))
-            .interval(Property.ofValue(Duration.ofMinutes(1)))
+            .interval(Duration.ofMinutes(1))
             .build();
 
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
@@ -207,5 +208,18 @@ class OpenStackTriggerTest {
         var context = TestsUtils.mockTrigger(runContextFactory, trigger);
         var ex = assertThrows(IllegalStateException.class, () -> trigger.evaluate(context.getKey(), context.getValue()));
         assertThat(ex.getMessage(), containsString("microversion"));
+    }
+
+    @Test
+    void testTriggerNextEvaluationDate() {
+        var trigger = Trigger.builder()
+            .id("trigger_sched")
+            .authUrl(Property.ofValue(authUrl))
+            .interval(Duration.ofMinutes(2))
+            .build();
+
+        var next = trigger.nextEvaluationDate();
+        assertNotNull(next);
+        assertTrue(next.isAfter(java.time.ZonedDateTime.now().minusSeconds(1)));
     }
 }

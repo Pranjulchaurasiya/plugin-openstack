@@ -160,12 +160,8 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
                 }
             } else if (sourceServer.getAddresses() != null && !sourceServer.getAddresses().isEmpty()) {
                 for (var netName : sourceServer.getAddresses().keySet()) {
-                    try {
-                        var resolvedNetId = client.resolveNetworkId(netName);
-                        networkRefs.add(ServerPayloads.NetworkRef.builder().uuid(resolvedNetId).build());
-                    } catch (Exception e) {
-                        logger.warn("Could not resolve network '{}' from source server: {}", netName, e.getMessage());
-                    }
+                    var resolvedNetId = client.resolveNetworkId(netName);
+                    networkRefs.add(ServerPayloads.NetworkRef.builder().uuid(resolvedNetId).build());
                 }
             }
 

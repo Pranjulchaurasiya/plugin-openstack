@@ -55,7 +55,7 @@ import java.util.List;
                 """
         ),
         @Example(
-            title = "Stream thousands of servers to Kestra internal storage in ION format",
+            title = "Stream servers to Kestra internal storage in ION format",
             full = true,
             code = """
                 id: store_large_openstack_inventory
@@ -68,7 +68,7 @@ import java.util.List;
                     applicationCredentialId: "{{ secret('OPENSTACK_APP_CRED_ID') }}"
                     applicationCredentialSecret: "{{ secret('OPENSTACK_APP_CRED_SECRET') }}"
                     fetchType: STORE
-                    limit: 500
+                    pageSize: 500
                 """
         )
     }
@@ -128,8 +128,8 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
     @Schema(
         title = "Maximum number of servers to return",
         description = """
-            Limits the maximum number of servers returned. Must be between 1 and 1000.
-            Defaults to 100.
+            Limits the maximum number of servers returned when `fetchType` is `FETCH` or `FETCH_ONE`.
+            Must be between 1 and 1000. Defaults to 100. Does not apply to `STORE` mode.
             """
     )
     @PluginProperty(group = "advanced")
@@ -181,8 +181,6 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
 
         var pattern = (rNameRegex != null && !rNameRegex.isBlank()) ? SafeRegex.compile(rNameRegex) : null;
         var currentMarker = rMarker;
-        var pageSize = Math.min(rLimit, rPageSize);
-
         try (var client = this.createClient(runContext)) {
             if (rFetchType == FetchType.STORE) {
                 var tempFile = runContext.workingDir().createTempFile(".ion").toFile();
@@ -190,7 +188,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
                 try (var outputStream = new BufferedOutputStream(new FileOutputStream(tempFile))) {
                     while (true) {
                         var pageParams = new HashMap<>(queryParams);
-                        pageParams.put("limit", String.valueOf(pageSize));
+                        pageParams.put("limit", String.valueOf(rPageSize));
                         if (currentMarker != null) {
                             pageParams.put("marker", currentMarker);
                         }
@@ -204,13 +202,10 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
                             if (pattern == null || (s.getName() != null && SafeRegex.matches(pattern, s.getName()))) {
                                 FileSerde.write(outputStream, s);
                                 count++;
-                                if (count >= rLimit) {
-                                    break;
-                                }
                             }
                         }
 
-                        if (count >= rLimit || batch.size() < pageSize) {
+                        if (batch.size() < rPageSize) {
                             break;
                         }
 
@@ -222,6 +217,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
                 return Output.builder().size(count).uri(uri).build();
             }
 
+            var pageSize = Math.min(rLimit, rPageSize);
             var matchingServers = new ArrayList<Server>();
             while (true) {
                 var pageParams = new HashMap<>(queryParams);

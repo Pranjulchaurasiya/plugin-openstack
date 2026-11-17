@@ -97,4 +97,4 @@ In OpenStack, VM snapshots created via Nova's `createImage` action are stored an
 ## Trigger
 
 - **Trigger**: Polling trigger that monitors OpenStack Nova compute servers for state changes and lifecycle events using KV Store watermarking and event filtering.
-  - **Properties**: `status`, `serverNameRegex`, `eventType` (`ALL`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`), `maxEvents` (defaults to 100), `interval` (defaults to `PT1M`)
+  - **Properties**: `status`, `serverNameRegex`, `eventType` (`ALL`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`), `maxEvents` (defaults to 50), `interval` (defaults to `PT1M`)

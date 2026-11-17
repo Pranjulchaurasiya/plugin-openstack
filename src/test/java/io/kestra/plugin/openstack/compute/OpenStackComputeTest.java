@@ -306,7 +306,7 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
 
-        assertNotNull(output);
+        assertNull(output);
     }
 
     @Test
@@ -327,7 +327,7 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
 
-        assertNotNull(output);
+        assertNull(output);
     }
 
     @Test
@@ -349,7 +349,7 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
 
-        assertNotNull(output);
+        assertNull(output);
         wireMockServer.verify(1, postRequestedFor(urlEqualTo("/compute/v2.1/servers/srv-01/action")));
     }
 
@@ -371,7 +371,7 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
 
-        assertNotNull(output);
+        assertNull(output);
     }
 
     @Test
@@ -394,7 +394,7 @@ class OpenStackComputeTest {
             .serverId(Property.ofValue("srv-01"))
             .build();
         var suspendOut = suspendTask.run(runContext);
-        assertNotNull(suspendOut);
+        assertNull(suspendOut);
 
         var resumeTask = ResumeServer.builder()
             .id("resume_server_" + IdUtils.create())
@@ -404,7 +404,7 @@ class OpenStackComputeTest {
             .serverId(Property.ofValue("srv-01"))
             .build();
         var resumeOut = resumeTask.run(runContext);
-        assertNotNull(resumeOut);
+        assertNull(resumeOut);
     }
 
     @Test
@@ -424,8 +424,45 @@ class OpenStackComputeTest {
 
         var output = task.run(runContext);
 
-        assertNotNull(output);
+        assertNull(output);
         wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/compute/v2.1/servers/srv-01")));
+    }
+
+    @Test
+    void testDeleteServerWithWaitUntilComplete() throws Exception {
+        wireMockServer.stubFor(delete(urlEqualTo("/compute/v2.1/servers/del-srv-01"))
+            .willReturn(aResponse().withStatus(204)));
+
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/del-srv-01"))
+            .inScenario("DeleteScenario")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"server\": {\"id\": \"del-srv-01\", \"status\": \"DELETING\"}}"))
+            .willSetStateTo("DELETED_STATE"));
+
+        wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/del-srv-01"))
+            .inScenario("DeleteScenario")
+            .whenScenarioStateIs("DELETED_STATE")
+            .willReturn(aResponse().withStatus(404)));
+
+        var runContext = runContextFactory.of();
+
+        var task = DeleteServer.builder()
+            .id("delete_server_wait_" + IdUtils.create())
+            .authUrl(Property.ofValue(authUrl))
+            .applicationCredentialId(Property.ofValue("app-cred-id"))
+            .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+            .serverId(Property.ofValue("del-srv-01"))
+            .waitUntilComplete(Property.ofValue(true))
+            .timeout(Property.ofValue(Duration.ofSeconds(5)))
+            .build();
+
+        var output = task.run(runContext);
+        assertNull(output);
+        wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/compute/v2.1/servers/del-srv-01")));
+        wireMockServer.verify(2, getRequestedFor(urlEqualTo("/compute/v2.1/servers/del-srv-01")));
     }
 
     @Test
@@ -577,7 +614,8 @@ class OpenStackComputeTest {
             .imageId(Property.ofValue("snap-image-uuid-123"))
             .build();
         var deleteSnapOut = deleteSnap.run(runContext);
-        assertThat(deleteSnapOut.getDeleted(), is(true));
+        assertNull(deleteSnapOut);
+        wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/image/v2/images/snap-image-uuid-123")));
     }
 
     @Test
@@ -748,7 +786,7 @@ class OpenStackComputeTest {
             .build();
 
         var output = task.run(runContext);
-        assertNotNull(output);
+        assertNull(output);
         wireMockServer.verify(1, deleteRequestedFor(urlEqualTo("/compute/v2.1/servers/dyn-srv-999")));
     }
 

@@ -11,6 +11,8 @@ import lombok.NoArgsConstructor;
 import lombok.ToString;
 import lombok.experimental.SuperBuilder;
 
+import java.time.Duration;
+
 @SuperBuilder
 @ToString
 @EqualsAndHashCode
@@ -52,5 +54,11 @@ public class DeleteServer extends AbstractServerActionTask {
     @Override
     protected void executeAction(OpenStackClient client, String serverId, RunContext runContext) throws Exception {
         client.deleteServer(serverId);
+    }
+
+    @Override
+    protected void waitForCompletion(OpenStackClient client, String serverId, Duration timeout, RunContext runContext) throws Exception {
+        runContext.logger().info("Waiting for server '{}' to be deleted...", serverId);
+        client.waitForServerDeletion(serverId, timeout, runContext);
     }
 }

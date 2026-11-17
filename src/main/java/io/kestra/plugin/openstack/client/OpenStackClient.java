@@ -666,6 +666,34 @@ public class OpenStackClient implements Closeable {
         throw new IllegalStateException("Timed out waiting for server '" + serverId + "' to reach status '" + targetStatus + "' (limit: " + limit + ").");
     }
 
+    public void waitForServerDeletion(String serverId, Duration timeout, RunContext runContext) throws Exception {
+        var start = Instant.now();
+        var limit = timeout != null ? timeout : Duration.ofMinutes(10);
+        long sleepMs = 1000;
+
+        while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
+            try {
+                var srv = getServer(serverId);
+                if (srv == null || "DELETED".equalsIgnoreCase(srv.getStatus())) {
+                    return;
+                }
+            } catch (IllegalArgumentException e) {
+                if (e.getMessage() != null && e.getMessage().contains("HTTP 404")) {
+                    return;
+                }
+                throw e;
+            }
+            try {
+                Thread.sleep(sleepMs);
+                sleepMs = Math.min(sleepMs + 1000, 5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for server deletion", e);
+            }
+        }
+        throw new IllegalStateException("Timed out waiting for server '" + serverId + "' to be deleted (limit: " + limit + ").");
+    }
+
     public List<InstanceActionResponses.InstanceAction> listInstanceActions(String serverId, String changesSince) throws Exception {
         authenticate();
         var uriBuilder = new StringBuilder(this.computeUrl).append("/servers/").append(serverId).append("/os-instance-actions");

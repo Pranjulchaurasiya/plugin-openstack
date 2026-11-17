@@ -35,18 +35,11 @@ import java.util.*;
 @EqualsAndHashCode
 @Getter
 @NoArgsConstructor
-@Schema(
-    title = "React to OpenStack server state changes",
-    description = """
+@Schema(title = "React to OpenStack server state changes", description = """
         Periodically polls OpenStack Nova compute servers for state changes using KV Store watermarking and event filtering, dispatching execution with compact event payloads.
-        """
-)
-@Plugin(
-    examples = {
-        @Example(
-            title = "Trigger a flow whenever an active OpenStack worker shuts down or stops",
-            full = true,
-            code = """
+        """)
+@Plugin(examples = {
+        @Example(title = "Trigger a flow whenever an active OpenStack worker shuts down or stops", full = true, code = """
                 id: handle_server_stop_events
                 namespace: company.openstack
 
@@ -64,159 +57,132 @@ import java.util.*;
                   - id: log_event
                     type: io.kestra.plugin.core.log.Log
                     message: "Detected {{ trigger.size }} OpenStack server event(s): {{ trigger.events }}"
-                """
-        )
-    }
-)
-public class Trigger extends AbstractTrigger implements PollingTriggerInterface, TriggerOutput<Trigger.Output>, OpenStackConnectionInterface {
+                """)
+})
+public class Trigger extends AbstractTrigger
+        implements PollingTriggerInterface, TriggerOutput<Trigger.Output>, OpenStackConnectionInterface {
 
     @NotNull
-    @Schema(
-        title = "Keystone Auth URL",
-        description = """
+    @Schema(title = "Keystone Auth URL", description = """
             Identity v3 auth URL, e.g. `https://keystone.example.com:5000/v3`.
-            """
-    )
+            """)
     @PluginProperty(group = "connection")
     private Property<String> authUrl;
 
-    @Schema(
-        title = "Application Credential ID",
-        description = """
-            Identity v3 Application Credential ID.
-            """
-    )
-    @PluginProperty(group = "connection", secret = true)
+    @Schema(title = "Application Credential ID", description = """
+            The OpenStack Keystone Application Credential ID for authentication.
+            """)
+    @PluginProperty(group = "connection")
     private Property<String> applicationCredentialId;
 
-    @Schema(
-        title = "Application Credential Secret",
-        description = """
-            Identity v3 Application Credential Secret.
-            """
-    )
+    @Schema(title = "Application Credential Secret", description = """
+            The OpenStack Keystone Application Credential Secret for authentication.
+            """)
     @PluginProperty(group = "connection", secret = true)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private Property<String> applicationCredentialSecret;
 
     @Schema(
-        title = "Username",
+        title = "OpenStack username",
         description = """
-            Keystone user name for password-based authentication.
-            """
-    )
+            The username for OpenStack password-based authentication.
+            """)
     @PluginProperty(group = "connection")
     private Property<String> username;
 
     @Schema(
-        title = "Password",
+        title = "OpenStack password",
         description = """
-            Keystone user password for password-based authentication.
-            """
-    )
+            The password for OpenStack password-based authentication.
+            """)
     @PluginProperty(group = "connection", secret = true)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private Property<String> password;
 
     @Schema(
-        title = "Project Name",
+        title = "Target project name",
         description = """
-            Project / tenant name for scoping token credentials.
-            """
-    )
+            The OpenStack project/tenant name to scope authentication to when using password credentials.
+            """)
     @PluginProperty(group = "connection")
     private Property<String> projectName;
 
     @Schema(
-        title = "Project Domain Name",
+        title = "User domain name",
         description = """
-            Domain name where project resides (defaults to `Default`).
-            """
-    )
-    @PluginProperty(group = "connection")
-    @Builder.Default
-    private Property<String> projectDomainName = Property.ofValue("Default");
-
-    @Schema(
-        title = "User Domain Name",
-        description = """
-            Domain name where user resides (defaults to `Default`).
-            """
-    )
+            The domain name for the user when using password credentials. Defaults to `Default`.
+            """)
     @PluginProperty(group = "connection")
     @Builder.Default
     private Property<String> userDomainName = Property.ofValue("Default");
 
     @Schema(
-        title = "Region",
+        title = "Project domain name",
         description = """
-            OpenStack region name (e.g. `RegionOne`).
-            """
-    )
+            The domain name for the project when using password credentials. Defaults to `Default`.
+            """)
+    @PluginProperty(group = "connection")
+    @Builder.Default
+    private Property<String> projectDomainName = Property.ofValue("Default");
+
+    @Schema(
+        title = "Region name",
+        description = """
+            The OpenStack region to target in the service catalog (e.g. `RegionOne`).
+            """)
     @PluginProperty(group = "connection")
     private Property<String> region;
 
     @Schema(
-        title = "Keystone Endpoint Type",
+        title = "Endpoint interface type",
         description = """
-            Catalog interface type (`public`, `internal`, `admin`). Defaults to `public`.
-            """
-    )
+            The endpoint interface type to resolve from the service catalog: `PUBLIC`, `INTERNAL`, or `ADMIN`. Defaults to `PUBLIC`.
+            """)
     @PluginProperty(group = "connection")
     @Builder.Default
     private Property<EndpointType> endpointType = Property.ofValue(EndpointType.PUBLIC);
 
     @Schema(
-        title = "HTTP Client Options",
+        title = "HTTP client options",
         description = """
-            Advanced HTTP connection configuration options.
-            """
-    )
+            Advanced HTTP client configuration such as timeouts and proxy settings.
+            """)
     @PluginProperty(group = "connection")
     private HttpConfiguration options;
 
     @Schema(
-        title = "Trigger polling interval",
+        title = "Interval between evaluations",
         description = """
-            Interval between consecutive polls to OpenStack Nova. Defaults to 1 minute (`PT1M`).
-            """
-    )
-    @PluginProperty(group = "main")
+            The duration between each poll evaluation. Defaults to 1 minute (`PT1M`).
+            """)
+    @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<Duration> interval = Property.ofValue(Duration.ofMinutes(1));
+    private Duration interval = Duration.ofMinutes(1);
 
-    @Schema(
-        title = "Server status filter",
-        description = """
+    @Schema(title = "Server status filter", description = """
             Optional server power state filter (`ACTIVE`, `SHUTOFF`, `PAUSED`, `ERROR`).
-            """
-    )
+            """)
     @PluginProperty(group = "main")
     private Property<String> status;
 
-    @Schema(
-        title = "Server name regex filter",
-        description = """
+    @Schema(title = "Server name regex filter", description = """
             Client-side regex filter applied against server names before triggering.
-            """
-    )
+            """)
     @PluginProperty(group = "main")
     private Property<String> serverNameRegex;
 
-    @Schema(
-        title = "Event type filter",
-        description = """
+    @Schema(title = "Event type filter", description = """
             Filter for specific server lifecycle events (`ALL`, `CREATE`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`). Defaults to `ALL`.
-            """
-    )
+            """)
     @PluginProperty(group = "main")
     @Builder.Default
     private Property<EventType> eventType = Property.ofValue(EventType.ALL);
 
-    @Schema(
-        title = "Max events per poll",
-        description = """
+    @Schema(title = "Max events per poll", description = """
             Maximum number of server events to emit in a single trigger execution. Must be between 1 and 500. Defaults to 50.
-            """
-    )
+            """)
     @PluginProperty(group = "advanced")
     @Builder.Default
     private Property<@Min(1) @Max(500) Integer> maxEvents = Property.ofValue(50);
@@ -234,7 +200,7 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
         var flowId = conditionContext.getFlow().getId();
         var triggerId = this.getId();
         var kvKey = ("wm_" + flowId.length() + "_" + flowId + "_" + triggerId.length() + "_" + triggerId)
-            .replaceAll("[^a-zA-Z0-9_.-]", "_");
+                .replaceAll("[^a-zA-Z0-9_.-]", "_");
         var kvStore = runContext.namespaceKv(conditionContext.getFlow().getNamespace());
 
         String rawWatermark = null;
@@ -308,8 +274,8 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                             break;
                         }
                         var eventId = act.getRequestId() != null
-                            ? act.getRequestId()
-                            : (srv.getId() + "_" + act.getAction() + "_" + act.getStartTime());
+                                ? act.getRequestId()
+                                : (srv.getId() + "_" + act.getAction() + "_" + act.getStartTime());
 
                         if (deliveredIds.contains(eventId)) {
                             continue;
@@ -317,12 +283,12 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
 
                         if (matchesEvent(act.getAction(), rEventType)) {
                             events.add(ServerEvent.builder()
-                                .serverId(srv.getId())
-                                .serverName(srv.getName())
-                                .eventType(act.getAction())
-                                .requestId(act.getRequestId())
-                                .timestamp(act.getStartTime() != null ? act.getStartTime() : srv.getUpdated())
-                                .build());
+                                    .serverId(srv.getId())
+                                    .serverName(srv.getName())
+                                    .eventType(act.getAction())
+                                    .requestId(act.getRequestId())
+                                    .timestamp(act.getStartTime() != null ? act.getStartTime() : srv.getUpdated())
+                                    .build());
                             newDeliveredIds.add(eventId);
                         }
                     }
@@ -332,22 +298,24 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                         var eventName = srv.getStatus() != null ? srv.getStatus() : "UPDATE";
                         if (rEventType == EventType.ALL || matchesStatusEvent(srv.getStatus(), rEventType)) {
                             events.add(ServerEvent.builder()
-                                .serverId(srv.getId())
-                                .serverName(srv.getName())
-                                .eventType(eventName)
-                                .requestId(null)
-                                .timestamp(srv.getUpdated())
-                                .build());
+                                    .serverId(srv.getId())
+                                    .serverName(srv.getName())
+                                    .eventType(eventName)
+                                    .requestId(null)
+                                    .timestamp(srv.getUpdated())
+                                    .build());
                             newDeliveredIds.add(eventId);
                         }
                     }
                 }
 
-                if (srv.getUpdated() != null && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
+                if (srv.getUpdated() != null
+                        && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
                     latestTimestamp = srv.getUpdated();
                     newDeliveredIds.clear();
                     for (var ev : events) {
-                        var id = ev.getRequestId() != null ? ev.getRequestId() : (ev.getServerId() + "_" + ev.getEventType());
+                        var id = ev.getRequestId() != null ? ev.getRequestId()
+                                : (ev.getServerId() + "_" + ev.getEventType());
                         newDeliveredIds.add(id);
                     }
                 }
@@ -357,10 +325,12 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
                 var newWatermarkValue = latestTimestamp + "|" + String.join(",", newDeliveredIds);
                 if (!newWatermarkValue.equals(rawWatermark)) {
                     try {
-                        kvStore.put(kvKey, new KVValueAndMetadata(new KVMetadata(null, (Duration) null), newWatermarkValue));
+                        kvStore.put(kvKey,
+                                new KVValueAndMetadata(new KVMetadata(null, (Duration) null), newWatermarkValue));
                         logger.debug("Updated OpenStack trigger watermark to '{}'.", newWatermarkValue);
                     } catch (Exception e) {
-                        logger.warn("Failed to persist watermark '{}' in KV store: {}", newWatermarkValue, e.getMessage());
+                        logger.warn("Failed to persist watermark '{}' in KV store: {}", newWatermarkValue,
+                                e.getMessage());
                     }
                 }
             }
@@ -372,9 +342,9 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
             logger.info("OpenStack trigger detected {} matching server event(s).", events.size());
 
             var output = Output.builder()
-                .events(events)
-                .size(events.size())
-                .build();
+                    .events(events)
+                    .size(events.size())
+                    .build();
 
             var execution = TriggerService.generateExecution(this, conditionContext, context, output);
             return Optional.of(execution);
@@ -417,28 +387,18 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
         };
     }
 
-    @Override
-    public Duration getInterval() {
-        return null;
-    }
 
     @Getter
     @Builder
     public static class Output implements io.kestra.core.models.tasks.Output {
-        @Schema(
-            title = "Server events",
-            description = """
+        @Schema(title = "Server events", description = """
                 List of detected lifecycle events for matching compute instances.
-                """
-        )
+                """)
         private final List<ServerEvent> events;
 
-        @Schema(
-            title = "Events count",
-            description = """
+        @Schema(title = "Events count", description = """
                 The number of events detected in this evaluation.
-                """
-        )
+                """)
         private final int size;
     }
 
@@ -446,44 +406,29 @@ public class Trigger extends AbstractTrigger implements PollingTriggerInterface,
     @Builder
     @ToString
     public static class ServerEvent {
-        @Schema(
-            title = "Server UUID",
-            description = """
+        @Schema(title = "Server UUID", description = """
                 The unique identifier of the server.
-                """
-        )
+                """)
         private final String serverId;
 
-        @Schema(
-            title = "Server name",
-            description = """
+        @Schema(title = "Server name", description = """
                 The name of the server.
-                """
-        )
+                """)
         private final String serverName;
 
-        @Schema(
-            title = "Event type",
-            description = """
+        @Schema(title = "Event type", description = """
                 The action or status event type (e.g. `create`, `stop`, `start`, `reboot`).
-                """
-        )
+                """)
         private final String eventType;
 
-        @Schema(
-            title = "Request ID",
-            description = """
+        @Schema(title = "Request ID", description = """
                 The Nova request UUID associated with this instance action, if available.
-                """
-        )
+                """)
         private final String requestId;
 
-        @Schema(
-            title = "Event timestamp",
-            description = """
+        @Schema(title = "Event timestamp", description = """
                 Timestamp when the event occurred.
-                """
-        )
+                """)
         private final String timestamp;
     }
 }

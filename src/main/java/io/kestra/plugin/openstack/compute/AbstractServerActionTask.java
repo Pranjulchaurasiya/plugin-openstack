@@ -49,7 +49,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
         title = "Timeout for lifecycle status transition",
         description = """
             Maximum time to wait for the server status transition when `waitUntilComplete` is true.
-            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -62,10 +62,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
         var rServerId = runContext.render(this.serverId).as(String.class)
             .orElseThrow(() -> new IllegalArgumentException("`serverId` is required"));
         var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(false);
-        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
-        if (rTimeout.isNegative() || rTimeout.isZero()) {
-            throw new IllegalArgumentException("`timeout` must be a positive duration");
-        }
+        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
 
         logger.info("Executing {} on OpenStack server '{}'...", actionName(), rServerId);
 
@@ -92,7 +89,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
     protected void waitForCompletion(OpenStackClient client, String serverId, Duration timeout, RunContext runContext) throws Exception {
         if (expectedStatus() != null) {
             runContext.logger().info("Waiting for server '{}' to reach status '{}'...", serverId, expectedStatus());
-            client.waitForServerStatus(serverId, expectedStatus(), timeout, runContext);
+            client.waitForServerStatus(serverId, expectedStatus(), timeout);
         }
     }
 }

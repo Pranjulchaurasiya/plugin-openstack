@@ -130,6 +130,22 @@ public abstract class AbstractComputeTask extends Task implements OpenStackConne
     @PluginProperty(group = "connection")
     protected HttpConfiguration options;
 
+    public static final java.time.Duration MAX_TIMEOUT = java.time.Duration.ofHours(6);
+    public static final java.time.Duration DEFAULT_TIMEOUT = java.time.Duration.ofMinutes(10);
+
+    public static java.time.Duration validateTimeout(java.time.Duration timeout) {
+        if (timeout == null) {
+            return DEFAULT_TIMEOUT;
+        }
+        if (timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("`timeout` must be a positive duration");
+        }
+        if (timeout.compareTo(MAX_TIMEOUT) > 0) {
+            throw new IllegalArgumentException("`timeout` cannot exceed " + MAX_TIMEOUT.toHours() + " hours (provided: " + timeout + ")");
+        }
+        return timeout;
+    }
+
     protected OpenStackClient createClient(RunContext runContext) throws Exception {
         return OpenStackConnectionInterface.createClient(this, runContext);
     }

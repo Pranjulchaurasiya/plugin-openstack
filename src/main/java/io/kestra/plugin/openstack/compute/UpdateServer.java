@@ -103,7 +103,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         title = "Timeout for resize operations",
         description = """
             Maximum time to wait for the server to reach `VERIFY_RESIZE` and then `ACTIVE`.
-            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -137,10 +137,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         var rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rAutoConfirm = runContext.render(this.autoConfirmResize).as(Boolean.class).orElse(true);
-        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
-        if (rTimeout.isNegative() || rTimeout.isZero()) {
-            throw new IllegalArgumentException("`timeout` must be a positive duration");
-        }
+        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rNetworkId = runContext.render(this.networkId).as(String.class).orElse(null);
 
@@ -166,10 +163,10 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
                 client.resizeServer(rServerId, targetFlavorId);
                 if (Boolean.TRUE.equals(rAutoConfirm)) {
                     logger.info("Waiting for server '{}' to reach VERIFY_RESIZE...", rServerId);
-                    client.waitForServerStatus(rServerId, "VERIFY_RESIZE", rTimeout, runContext);
+                    client.waitForServerStatus(rServerId, "VERIFY_RESIZE", rTimeout);
                     client.confirmResize(rServerId);
                     logger.info("Confirmed resize for server '{}'. Waiting for ACTIVE...", rServerId);
-                    server = client.waitForServerStatus(rServerId, "ACTIVE", rTimeout, runContext);
+                    server = client.waitForServerStatus(rServerId, "ACTIVE", rTimeout);
                 }
             }
 

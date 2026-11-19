@@ -27,6 +27,7 @@ import lombok.*;
 import lombok.experimental.SuperBuilder;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -229,15 +230,9 @@ public class Trigger extends AbstractTrigger
                 servers = filtered;
             }
 
-            var events = new ArrayList<ServerEvent>();
-            var newDeliveredIds = new HashSet<>(deliveredIds);
-            String latestTimestamp = watermarkTimestamp;
+            var candidates = new ArrayList<CandidateEvent>();
 
             for (var srv : servers) {
-                if (events.size() >= rMaxEvents) {
-                    break;
-                }
-
                 var actions = Collections.<InstanceActionResponses.InstanceAction>emptyList();
                 try {
                     actions = client.listInstanceActions(srv.getId(), watermarkTimestamp);
@@ -252,48 +247,111 @@ public class Trigger extends AbstractTrigger
 
                 if (!actions.isEmpty()) {
                     for (var act : actions) {
-                        if (events.size() >= rMaxEvents) {
-                            break;
-                        }
                         var eventId = act.getRequestId() != null
                                 ? act.getRequestId()
                                 : (srv.getId() + "_" + act.getAction() + "_" + act.getStartTime());
+
+                        var ts = act.getStartTime() != null ? act.getStartTime() : srv.getUpdated();
+                        if (rawWatermark != null) {
+                            var eventInstant = parseInstantSafely(ts);
+                            var watermarkInstant = parseInstantSafely(watermarkTimestamp);
+                            if (watermarkInstant != null && eventInstant != null && eventInstant.isBefore(watermarkInstant)) {
+                                continue;
+                            }
+                        }
 
                         if (deliveredIds.contains(eventId)) {
                             continue;
                         }
 
                         if (matchesEvent(act.getAction(), rEventType)) {
-                            events.add(ServerEvent.builder()
-                                    .serverId(srv.getId())
-                                    .serverName(srv.getName())
-                                    .eventType(act.getAction())
-                                    .requestId(act.getRequestId())
-                                    .timestamp(act.getStartTime() != null ? act.getStartTime() : srv.getUpdated())
-                                    .build());
-                            newDeliveredIds.add(eventId);
+                            candidates.add(new CandidateEvent(
+                                    srv.getId(),
+                                    srv.getName(),
+                                    act.getAction(),
+                                    act.getRequestId(),
+                                    ts,
+                                    eventId
+                            ));
                         }
                     }
                 } else {
                     var eventId = srv.getId() + "_" + (srv.getUpdated() != null ? srv.getUpdated() : srv.getStatus());
+                    if (rawWatermark != null) {
+                        var eventInstant = parseInstantSafely(srv.getUpdated());
+                        var watermarkInstant = parseInstantSafely(watermarkTimestamp);
+                        if (watermarkInstant != null && eventInstant != null && eventInstant.isBefore(watermarkInstant)) {
+                            continue;
+                        }
+                    }
+
                     if (!deliveredIds.contains(eventId)) {
                         var eventName = srv.getStatus() != null ? srv.getStatus() : "UPDATE";
                         if (rEventType == EventType.ALL || matchesStatusEvent(srv.getStatus(), rEventType)) {
-                            events.add(ServerEvent.builder()
-                                    .serverId(srv.getId())
-                                    .serverName(srv.getName())
-                                    .eventType(eventName)
-                                    .requestId(null)
-                                    .timestamp(srv.getUpdated())
-                                    .build());
-                            newDeliveredIds.add(eventId);
+                            candidates.add(new CandidateEvent(
+                                    srv.getId(),
+                                    srv.getName(),
+                                    eventName,
+                                    null,
+                                    srv.getUpdated(),
+                                    eventId
+                            ));
                         }
                     }
                 }
+            }
 
-                if (srv.getUpdated() != null
-                        && (latestTimestamp == null || srv.getUpdated().compareTo(latestTimestamp) > 0)) {
-                    latestTimestamp = srv.getUpdated();
+            // Sort candidate events chronologically (oldest first)
+            candidates.sort(Comparator
+                    .comparing((CandidateEvent c) -> parseInstantSafely(c.timestamp()), Comparator.nullsLast(Comparator.naturalOrder()))
+                    .thenComparing(CandidateEvent::eventId));
+
+            var events = new ArrayList<ServerEvent>();
+            var deliveredInThisPoll = new ArrayList<CandidateEvent>();
+
+            for (var candidate : candidates) {
+                if (events.size() >= rMaxEvents) {
+                    break;
+                }
+                events.add(ServerEvent.builder()
+                        .serverId(candidate.serverId())
+                        .serverName(candidate.serverName())
+                        .eventType(candidate.eventType())
+                        .requestId(candidate.requestId())
+                        .timestamp(candidate.timestamp())
+                        .build());
+                deliveredInThisPoll.add(candidate);
+            }
+
+            var latestTimestamp = watermarkTimestamp;
+            var newDeliveredIds = new HashSet<String>();
+
+            if (!deliveredInThisPoll.isEmpty()) {
+                var lastDelivered = deliveredInThisPoll.get(deliveredInThisPoll.size() - 1);
+                if (lastDelivered.timestamp() != null && !lastDelivered.timestamp().isBlank()) {
+                    latestTimestamp = lastDelivered.timestamp();
+                }
+
+                if (watermarkTimestamp != null && isSameTimestamp(latestTimestamp, watermarkTimestamp)) {
+                    newDeliveredIds.addAll(deliveredIds);
+                }
+
+                for (var d : deliveredInThisPoll) {
+                    if (isSameTimestamp(d.timestamp(), latestTimestamp)) {
+                        newDeliveredIds.add(d.eventId());
+                    }
+                }
+            } else {
+                var maxServerUpdated = watermarkTimestamp;
+                for (var srv : servers) {
+                    if (srv.getUpdated() != null && (maxServerUpdated == null || srv.getUpdated().compareTo(maxServerUpdated) > 0)) {
+                        maxServerUpdated = srv.getUpdated();
+                    }
+                }
+                if (maxServerUpdated != null && (watermarkTimestamp == null || maxServerUpdated.compareTo(watermarkTimestamp) > 0)) {
+                    latestTimestamp = maxServerUpdated;
+                } else {
+                    newDeliveredIds.addAll(deliveredIds);
                 }
             }
 
@@ -362,6 +420,35 @@ public class Trigger extends AbstractTrigger
             default -> false;
         };
     }
+
+    private static Instant parseInstantSafely(String ts) {
+        if (ts == null || ts.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(ts);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isSameTimestamp(String ts1, String ts2) {
+        if (Objects.equals(ts1, ts2)) {
+            return true;
+        }
+        var i1 = parseInstantSafely(ts1);
+        var i2 = parseInstantSafely(ts2);
+        return i1 != null && i1.equals(i2);
+    }
+
+    private record CandidateEvent(
+            String serverId,
+            String serverName,
+            String eventType,
+            String requestId,
+            String timestamp,
+            String eventId
+    ) {}
 
     @Getter
     @Builder

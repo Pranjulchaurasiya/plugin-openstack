@@ -16,15 +16,30 @@ public class NetworkResponses {
     @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Network {
-        @Schema(title = "Network UUID", description = "The unique identifier of the network.")
+        @Schema(
+            title = "Network UUID",
+            description = """
+                The unique identifier of the network.
+                """
+        )
         @JsonProperty("id")
         private String id;
 
-        @Schema(title = "Network Name", description = "The human-readable name of the network.")
+        @Schema(
+            title = "Network Name",
+            description = """
+                The human-readable name of the network.
+                """
+        )
         @JsonProperty("name")
         private String name;
 
-        @Schema(title = "Network Status", description = "The status of the network (e.g. ACTIVE).")
+        @Schema(
+            title = "Network Status",
+            description = """
+                The status of the network (e.g. ACTIVE).
+                """
+        )
         @JsonProperty("status")
         private String status;
     }

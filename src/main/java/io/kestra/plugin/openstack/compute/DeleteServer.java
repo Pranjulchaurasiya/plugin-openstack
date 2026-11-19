@@ -59,6 +59,6 @@ public class DeleteServer extends AbstractServerActionTask {
     @Override
     protected void waitForCompletion(OpenStackClient client, String serverId, Duration timeout, RunContext runContext) throws Exception {
         runContext.logger().info("Waiting for server '{}' to be deleted...", serverId);
-        client.waitForServerDeletion(serverId, timeout, runContext);
+        client.waitForServerDeletion(serverId, timeout);
     }
 }

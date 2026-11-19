@@ -16,23 +16,48 @@ public class FlavorResponses {
     @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Flavor {
-        @Schema(title = "Flavor ID", description = "The unique identifier of the flavor.")
+        @Schema(
+            title = "Flavor ID",
+            description = """
+                The unique identifier of the flavor.
+                """
+        )
         @JsonProperty("id")
         private String id;
 
-        @Schema(title = "Flavor Name", description = "The human-readable name of the flavor (e.g. m1.small).")
+        @Schema(
+            title = "Flavor Name",
+            description = """
+                The human-readable name of the flavor (e.g. m1.small).
+                """
+        )
         @JsonProperty("name")
         private String name;
 
-        @Schema(title = "Virtual CPUs", description = "Number of vCPUs allocated.")
+        @Schema(
+            title = "Virtual CPUs",
+            description = """
+                Number of vCPUs allocated.
+                """
+        )
         @JsonProperty("vcpus")
         private Integer vcpus;
 
-        @Schema(title = "RAM (MB)", description = "Memory in megabytes.")
+        @Schema(
+            title = "RAM (MB)",
+            description = """
+                Memory in megabytes.
+                """
+        )
         @JsonProperty("ram")
         private Integer ram;
 
-        @Schema(title = "Root Disk (GB)", description = "Root disk size in gigabytes.")
+        @Schema(
+            title = "Root Disk (GB)",
+            description = """
+                Root disk size in gigabytes.
+                """
+        )
         @JsonProperty("disk")
         private Integer disk;
     }

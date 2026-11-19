@@ -112,7 +112,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         title = "Timeout for cloning lifecycle operations",
         description = """
             Maximum time to wait for the snapshot to become active and for the cloned server to reach `ACTIVE` status.
-            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -129,10 +129,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rSnapshotName = runContext.render(this.snapshotName).as(String.class).orElse(rName + "-snapshot");
         var rDeleteSnap = runContext.render(this.deleteSnapshotAfterClone).as(Boolean.class).orElse(false);
-        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
-        if (rTimeout.isNegative() || rTimeout.isZero()) {
-            throw new IllegalArgumentException("`timeout` must be a positive duration");
-        }
+        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
         var rNetworks = runContext.render(this.networks).asList(CreateServer.NetworkAttachment.class);
 
         logger.info("Cloning OpenStack server '{}' to new server '{}'...", rSourceServerId, rName);
@@ -174,7 +171,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
             var snapshotImageId = client.createSnapshot(rSourceServerId, rSnapshotName, null);
 
             logger.info("Waiting for snapshot image '{}' to reach active status...", snapshotImageId);
-            client.waitForImageActive(snapshotImageId, rTimeout, runContext);
+            client.waitForImageActive(snapshotImageId, rTimeout);
             logger.info("Snapshot image '{}' is now active.", snapshotImageId);
 
             logger.info("Provisioning cloned server '{}' from snapshot image '{}'...", rName, snapshotImageId);
@@ -192,7 +189,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
 
             if (Boolean.TRUE.equals(rDeleteSnap) && snapshotImageId != null) {
                 logger.info("Waiting for cloned server '{}' to become ACTIVE before deleting snapshot '{}'...", clonedServer.getId(), snapshotImageId);
-                clonedServer = client.waitForServerStatus(clonedServer.getId(), "ACTIVE", rTimeout, runContext);
+                clonedServer = client.waitForServerStatus(clonedServer.getId(), "ACTIVE", rTimeout);
                 try {
                     client.deleteSnapshot(snapshotImageId);
                     logger.info("Successfully deleted intermediate snapshot image '{}'.", snapshotImageId);

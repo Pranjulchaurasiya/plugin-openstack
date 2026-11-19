@@ -163,7 +163,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         title = "Timeout duration",
         description = """
             Maximum duration to wait for the server to reach `ACTIVE` status when `waitUntilComplete` is true.
-            Must be a positive duration. Defaults to 10 minutes (`PT10M`).
+            Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
             """
     )
     @PluginProperty(group = "advanced")
@@ -186,10 +186,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rTags = runContext.render(this.tags).asList(String.class);
         var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(true);
-        var rTimeout = runContext.render(this.timeout).as(Duration.class).orElse(Duration.ofMinutes(10));
-        if (rTimeout.isNegative() || rTimeout.isZero()) {
-            throw new IllegalArgumentException("`timeout` must be a positive duration");
-        }
+        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
 
         try (var client = this.createClient(runContext)) {
             var resolvedFlavorId = client.resolveFlavorId(rFlavorRef);
@@ -198,7 +195,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
             String encodedUserData = null;
             if (rUserData != null && !rUserData.isBlank()) {
                 var trimmed = rUserData.trim();
-                boolean isAlreadyBase64 = false;
+                var isAlreadyBase64 = false;
                 try {
                     var decoded = Base64.getDecoder().decode(trimmed);
                     isAlreadyBase64 = Base64.getEncoder().encodeToString(decoded).equals(trimmed.replaceAll("\\s+", ""));
@@ -251,7 +248,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
 
             if (Boolean.TRUE.equals(rWait) && !"ACTIVE".equalsIgnoreCase(server.getStatus())) {
                 logger.info("Waiting for server '{}' to become ACTIVE (timeout: {})...", server.getId(), rTimeout);
-                server = client.waitForServerStatus(server.getId(), "ACTIVE", rTimeout, runContext);
+                server = client.waitForServerStatus(server.getId(), "ACTIVE", rTimeout);
                 logger.info("Server '{}' is now ACTIVE.", server.getId());
             }
 

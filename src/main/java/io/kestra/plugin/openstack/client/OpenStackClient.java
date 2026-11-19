@@ -642,7 +642,7 @@ public class OpenStackClient implements Closeable {
         throw new IllegalStateException(timeoutMessage + " (limit: " + limit + ").");
     }
 
-    public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout, RunContext runContext) throws Exception {
+    public GlanceResponses.GlanceImage waitForImageActive(String imageId, Duration timeout) throws Exception {
         return pollUntil(timeout, "Timed out waiting for snapshot image '" + imageId + "' to become active", () -> {
             var img = getImage(imageId);
             var status = img != null ? img.getStatus() : null;
@@ -656,7 +656,7 @@ public class OpenStackClient implements Closeable {
         });
     }
 
-    public Server waitForServerStatus(String serverId, String targetStatus, Duration timeout, RunContext runContext) throws Exception {
+    public Server waitForServerStatus(String serverId, String targetStatus, Duration timeout) throws Exception {
         return pollUntil(timeout, "Timed out waiting for server '" + serverId + "' to reach status '" + targetStatus + "'", () -> {
             var srv = getServer(serverId);
             var status = srv.getStatus();
@@ -670,7 +670,7 @@ public class OpenStackClient implements Closeable {
         });
     }
 
-    public void waitForServerDeletion(String serverId, Duration timeout, RunContext runContext) throws Exception {
+    public void waitForServerDeletion(String serverId, Duration timeout) throws Exception {
         pollUntil(timeout, "Timed out waiting for server '" + serverId + "' to be deleted", () -> {
             try {
                 var srv = getServer(serverId);

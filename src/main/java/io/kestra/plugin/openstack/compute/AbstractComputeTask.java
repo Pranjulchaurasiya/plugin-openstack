@@ -9,6 +9,7 @@ import io.kestra.plugin.openstack.client.OpenStackClient;
 import io.kestra.plugin.openstack.client.model.EndpointType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -130,10 +131,10 @@ public abstract class AbstractComputeTask extends Task implements OpenStackConne
     @PluginProperty(group = "connection")
     protected HttpConfiguration options;
 
-    public static final java.time.Duration MAX_TIMEOUT = java.time.Duration.ofHours(6);
-    public static final java.time.Duration DEFAULT_TIMEOUT = java.time.Duration.ofMinutes(10);
+    public static final Duration MAX_TIMEOUT = Duration.ofHours(6);
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(10);
 
-    public static java.time.Duration validateTimeout(java.time.Duration timeout) {
+    public static Duration validateTimeout(Duration timeout) {
         if (timeout == null) {
             return DEFAULT_TIMEOUT;
         }

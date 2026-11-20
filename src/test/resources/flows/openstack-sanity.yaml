@@ -25,7 +25,7 @@ tasks:
     flavorRef: "m1.small"
     imageRef: "ubuntu-22.04"
     networks:
-      - "private-net"
+      - uuid: "private-net"
     userData: |
       #cloud-config
       package_upgrade: true
@@ -40,14 +40,14 @@ tasks:
     authUrl: "https://identity.region.openstack.example.com/v3"
     applicationCredentialId: "{{ secret('OS_APP_CRED_ID') }}"
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
-    serverId: "{{ outputs.create_server.server.id }}"
+    serverId: "{{ outputs.create_server.serverId }}"
 
   - id: update_server
     type: io.kestra.plugin.openstack.compute.UpdateServer
     authUrl: "https://identity.region.openstack.example.com/v3"
     applicationCredentialId: "{{ secret('OS_APP_CRED_ID') }}"
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
-    serverId: "{{ outputs.create_server.server.id }}"
+    serverId: "{{ outputs.create_server.serverId }}"
     name: "sanity-worker-renamed"
     metadata:
       audit: "verified"
@@ -57,7 +57,7 @@ tasks:
     authUrl: "https://identity.region.openstack.example.com/v3"
     applicationCredentialId: "{{ secret('OS_APP_CRED_ID') }}"
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
-    serverId: "{{ outputs.create_server.server.id }}"
+    serverId: "{{ outputs.create_server.serverId }}"
     waitUntilComplete: true
     timeout: PT5M
 
@@ -66,6 +66,15 @@ tasks:
     authUrl: "https://identity.region.openstack.example.com/v3"
     applicationCredentialId: "{{ secret('OS_APP_CRED_ID') }}"
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
-    serverId: "{{ outputs.create_server.server.id }}"
+    serverId: "{{ outputs.create_server.serverId }}"
+    waitUntilComplete: true
+    timeout: PT5M
+
+  - id: delete_server
+    type: io.kestra.plugin.openstack.compute.DeleteServer
+    authUrl: "https://identity.region.openstack.example.com/v3"
+    applicationCredentialId: "{{ secret('OS_APP_CRED_ID') }}"
+    applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
+    serverId: "{{ outputs.create_server.serverId }}"
     waitUntilComplete: true
     timeout: PT5M

@@ -255,7 +255,8 @@ public class Trigger extends AbstractTrigger
                         if (rawWatermark != null) {
                             var eventInstant = parseInstantSafely(ts);
                             var watermarkInstant = parseInstantSafely(watermarkTimestamp);
-                            if (watermarkInstant != null && eventInstant != null && eventInstant.isBefore(watermarkInstant)) {
+                            if (watermarkInstant != null && eventInstant != null
+                                    && eventInstant.isBefore(watermarkInstant)) {
                                 continue;
                             }
                         }
@@ -271,8 +272,7 @@ public class Trigger extends AbstractTrigger
                                     act.getAction(),
                                     act.getRequestId(),
                                     ts,
-                                    eventId
-                            ));
+                                    eventId));
                         }
                     }
                 } else {
@@ -280,7 +280,8 @@ public class Trigger extends AbstractTrigger
                     if (rawWatermark != null) {
                         var eventInstant = parseInstantSafely(srv.getUpdated());
                         var watermarkInstant = parseInstantSafely(watermarkTimestamp);
-                        if (watermarkInstant != null && eventInstant != null && eventInstant.isBefore(watermarkInstant)) {
+                        if (watermarkInstant != null && eventInstant != null
+                                && eventInstant.isBefore(watermarkInstant)) {
                             continue;
                         }
                     }
@@ -294,16 +295,15 @@ public class Trigger extends AbstractTrigger
                                     eventName,
                                     null,
                                     srv.getUpdated(),
-                                    eventId
-                            ));
+                                    eventId));
                         }
                     }
                 }
             }
 
-            // Sort candidate events chronologically (oldest first)
             candidates.sort(Comparator
-                    .comparing((CandidateEvent c) -> parseInstantSafely(c.timestamp()), Comparator.nullsLast(Comparator.naturalOrder()))
+                    .comparing((CandidateEvent c) -> parseInstantSafely(c.timestamp()),
+                            Comparator.nullsLast(Comparator.naturalOrder()))
                     .thenComparing(CandidateEvent::eventId));
 
             var events = new ArrayList<ServerEvent>();
@@ -327,7 +327,7 @@ public class Trigger extends AbstractTrigger
             var newDeliveredIds = new HashSet<String>();
 
             if (!deliveredInThisPoll.isEmpty()) {
-                var lastDelivered = deliveredInThisPoll.get(deliveredInThisPoll.size() - 1);
+                var lastDelivered = deliveredInThisPoll.getLast();
                 if (lastDelivered.timestamp() != null && !lastDelivered.timestamp().isBlank()) {
                     latestTimestamp = lastDelivered.timestamp();
                 }
@@ -344,11 +344,13 @@ public class Trigger extends AbstractTrigger
             } else {
                 var maxServerUpdated = watermarkTimestamp;
                 for (var srv : servers) {
-                    if (srv.getUpdated() != null && (maxServerUpdated == null || srv.getUpdated().compareTo(maxServerUpdated) > 0)) {
+                    if (srv.getUpdated() != null
+                            && (maxServerUpdated == null || srv.getUpdated().compareTo(maxServerUpdated) > 0)) {
                         maxServerUpdated = srv.getUpdated();
                     }
                 }
-                if (maxServerUpdated != null && (watermarkTimestamp == null || maxServerUpdated.compareTo(watermarkTimestamp) > 0)) {
+                if (maxServerUpdated != null
+                        && (watermarkTimestamp == null || maxServerUpdated.compareTo(watermarkTimestamp) > 0)) {
                     latestTimestamp = maxServerUpdated;
                 } else {
                     newDeliveredIds.addAll(deliveredIds);
@@ -427,8 +429,19 @@ public class Trigger extends AbstractTrigger
         }
         try {
             return Instant.parse(ts);
-        } catch (Exception e) {
-            return null;
+        } catch (Exception ignored) {
+            try {
+                var normalized = ts.trim().replace(' ', 'T');
+                if (!normalized.endsWith("Z") && !normalized.contains("+")) {
+                    var tIdx = normalized.indexOf('T');
+                    if (tIdx == -1 || !normalized.substring(tIdx).contains("-")) {
+                        normalized = normalized + "Z";
+                    }
+                }
+                return Instant.parse(normalized);
+            } catch (Exception e) {
+                return null;
+            }
         }
     }
 
@@ -447,8 +460,8 @@ public class Trigger extends AbstractTrigger
             String eventType,
             String requestId,
             String timestamp,
-            String eventId
-    ) {}
+            String eventId) {
+    }
 
     @Getter
     @Builder

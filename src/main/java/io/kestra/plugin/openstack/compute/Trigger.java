@@ -343,14 +343,16 @@ public class Trigger extends AbstractTrigger
                 }
             } else {
                 var maxServerUpdated = watermarkTimestamp;
+                var maxInstant = parseInstantSafely(watermarkTimestamp);
                 for (var srv : servers) {
-                    if (srv.getUpdated() != null
-                            && (maxServerUpdated == null || srv.getUpdated().compareTo(maxServerUpdated) > 0)) {
+                    var srvInstant = parseInstantSafely(srv.getUpdated());
+                    if (srvInstant != null && (maxInstant == null || srvInstant.isAfter(maxInstant))) {
+                        maxInstant = srvInstant;
                         maxServerUpdated = srv.getUpdated();
                     }
                 }
-                if (maxServerUpdated != null
-                        && (watermarkTimestamp == null || maxServerUpdated.compareTo(watermarkTimestamp) > 0)) {
+                var watermarkInstant = parseInstantSafely(watermarkTimestamp);
+                if (maxInstant != null && (watermarkInstant == null || maxInstant.isAfter(watermarkInstant))) {
                     latestTimestamp = maxServerUpdated;
                 } else {
                     newDeliveredIds.addAll(deliveredIds);

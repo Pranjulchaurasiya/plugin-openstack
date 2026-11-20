@@ -1033,19 +1033,19 @@ class OpenStackComputeTest {
     assertThat(exNf.getMessage(), containsString("OpenStack network not found"));
   }
 
-    @Test
-    void testSanityFlowDefinition() throws Exception {
-        try (var is = getClass().getClassLoader().getResourceAsStream("flows/openstack-sanity.yaml")) {
-            assertNotNull(is, "flows/openstack-sanity.yaml must exist");
-            var yaml = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            @SuppressWarnings("unchecked")
-            var flowMap = (Map<String, Object>) JacksonMapper.ofYaml().readValue(yaml, Map.class);
-            assertEquals("openstack_sanity", flowMap.get("id"));
-            assertEquals("company.infrastructure", flowMap.get("namespace"));
-            @SuppressWarnings("unchecked")
-            var tasks = (List<Map<String, Object>>) flowMap.get("tasks");
-            assertEquals(7, tasks.size());
-            assertEquals("io.kestra.plugin.openstack.compute.DeleteServer", tasks.getLast().get("type"));
-        }
+  @Test
+  void testSanityFlowDefinition() throws Exception {
+    try (var is = getClass().getClassLoader().getResourceAsStream("flows/openstack-sanity.yaml")) {
+      assertNotNull(is, "flows/openstack-sanity.yaml must exist");
+      var yaml = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      @SuppressWarnings("unchecked")
+      var flowMap = (Map<String, Object>) JacksonMapper.ofYaml().readValue(yaml, Map.class);
+      assertEquals("openstack_sanity", flowMap.get("id"));
+      assertEquals("company.infrastructure", flowMap.get("namespace"));
+      @SuppressWarnings("unchecked")
+      var tasks = (List<Map<String, Object>>) flowMap.get("tasks");
+      assertEquals(7, tasks.size());
+      assertEquals("io.kestra.plugin.openstack.compute.DeleteServer", tasks.getLast().get("type"));
     }
+  }
 }

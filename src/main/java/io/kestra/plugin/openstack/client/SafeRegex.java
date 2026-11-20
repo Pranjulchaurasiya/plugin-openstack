@@ -38,12 +38,12 @@ public final class SafeRegex {
     }
 
     public static boolean matches(Pattern pattern, String input) {
-        Matcher matcher = pattern.matcher(new DeadlineCharSequence(input, System.nanoTime() + MATCH_TIMEOUT.toNanos()));
+        var matcher = pattern.matcher(new DeadlineCharSequence(input, System.nanoTime() + MATCH_TIMEOUT.toNanos()));
         return matcher.matches();
     }
 
     static boolean hasNestedQuantifier(String regex) {
-        Deque<Boolean> groups = new ArrayDeque<>();
+        var groups = new ArrayDeque<Boolean>();
         boolean inClass = false;
         boolean lastWasQuantified = false;
         for (int i = 0; i < regex.length(); i++) {
@@ -63,7 +63,7 @@ public final class SafeRegex {
                 case '[' -> inClass = true;
                 case '(' -> groups.push(false);
                 case ')' -> {
-                    boolean innerQuantified = !groups.isEmpty() && groups.pop();
+                    var innerQuantified = !groups.isEmpty() && groups.pop();
                     if (innerQuantified && isQuantifierAt(regex, i + 1)) {
                         return true;
                     }

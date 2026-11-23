@@ -3,7 +3,6 @@ package io.kestra.plugin.openstack.client;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -44,10 +43,10 @@ public final class SafeRegex {
 
     static boolean hasNestedQuantifier(String regex) {
         var groups = new ArrayDeque<Boolean>();
-        boolean inClass = false;
-        boolean lastWasQuantified = false;
-        for (int i = 0; i < regex.length(); i++) {
-            char c = regex.charAt(i);
+        var inClass = false;
+        var lastWasQuantified = false;
+        for (var i = 0; i < regex.length(); i++) {
+            var c = regex.charAt(i);
             if (c == '\\') {
                 i++;
                 lastWasQuantified = false;
@@ -97,7 +96,7 @@ public final class SafeRegex {
         if (index >= regex.length()) {
             return false;
         }
-        char c = regex.charAt(index);
+        var c = regex.charAt(index);
         if (c == '*' || c == '+') {
             return true;
         }

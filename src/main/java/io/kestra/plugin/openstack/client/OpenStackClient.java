@@ -324,7 +324,7 @@ public class OpenStackClient implements Closeable {
     }
 
     public void rebootServer(String serverId, String type) throws Exception {
-        String rebootType = StringUtils.isNotBlank(type) ? type.trim().toUpperCase(Locale.ROOT) : "SOFT";
+        var rebootType = StringUtils.isNotBlank(type) ? type.trim().toUpperCase(Locale.ROOT) : "SOFT";
         if (!rebootType.equals("SOFT") && !rebootType.equals("HARD")) {
             throw new IllegalArgumentException("Invalid reboot type '" + type + "': expected SOFT or HARD.");
         }
@@ -624,7 +624,7 @@ public class OpenStackClient implements Closeable {
     private <T> T pollUntil(Duration timeout, String timeoutMessage, ConditionSupplier<T> supplier) throws Exception {
         var start = Instant.now();
         var limit = timeout != null ? timeout : Duration.ofMinutes(10);
-        long sleepMs = 1000;
+        var sleepMs = 1000L;
 
         while (Duration.between(start, Instant.now()).compareTo(limit) < 0) {
             var result = supplier.get();

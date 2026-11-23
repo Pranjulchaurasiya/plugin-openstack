@@ -42,7 +42,7 @@ class OpenStackRequestBuildingTest {
     @BeforeEach
     void setupStubs() {
         wireMockServer.resetAll();
-        String tokenBody = String.format("""
+        var tokenBody = String.format("""
             {"token": {"catalog": [
               {"type": "compute", "name": "nova", "endpoints": [
                 {"interface": "public", "region": "RegionOne", "url": "http://localhost:%d/compute/v2.1"}]}
@@ -130,7 +130,7 @@ class OpenStackRequestBuildingTest {
     }
 
     private void stubImageCatalog() {
-        String tokenBody = String.format("""
+        var tokenBody = String.format("""
             {"token": {"catalog": [
               {"type": "compute", "name": "nova", "endpoints": [
                 {"interface": "public", "region": "RegionOne", "url": "http://localhost:%d/compute/v2.1"}]},

@@ -15,6 +15,7 @@ import io.kestra.plugin.openstack.client.model.Server;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -1037,7 +1038,7 @@ class OpenStackComputeTest {
   void testSanityFlowDefinition() throws Exception {
     try (var is = getClass().getClassLoader().getResourceAsStream("flows/openstack-sanity.yaml")) {
       assertNotNull(is, "flows/openstack-sanity.yaml must exist");
-      var yaml = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      var yaml = new String(is.readAllBytes(), StandardCharsets.UTF_8);
       @SuppressWarnings("unchecked")
       var flowMap = (Map<String, Object>) JacksonMapper.ofYaml().readValue(yaml, Map.class);
       assertEquals("openstack_sanity", flowMap.get("id"));

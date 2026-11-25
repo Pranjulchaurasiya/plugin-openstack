@@ -459,35 +459,6 @@ public class OpenStackClient implements Closeable {
         return res != null && res.getFlavors() != null ? res.getFlavors() : Collections.emptyList();
     }
 
-    public String resolveServerId(String serverNameOrId) throws Exception {
-        if (StringUtils.isBlank(serverNameOrId)) {
-            return null;
-        }
-        authenticate();
-        try {
-            var directServer = getServer(serverNameOrId);
-            if (directServer != null && directServer.getId() != null) {
-                return directServer.getId();
-            }
-        } catch (Exception ignored) {
-        }
-
-        var uri = this.computeUrl + "/servers?name=" + URLEncoder.encode(serverNameOrId, StandardCharsets.UTF_8);
-        var req = computeRequest("GET", uri, null);
-        var resp = executeHttp(req, String.class);
-        var res = parseResponse(resp, ServerResponses.MultipleServers.class, "resolve server by name");
-        var servers = res != null && res.getServers() != null ? res.getServers() : Collections.<Server>emptyList();
-
-        if (servers.isEmpty()) {
-            throw new IllegalArgumentException("OpenStack server not found: '" + serverNameOrId + "'");
-        }
-        if (servers.size() > 1) {
-            throw new IllegalArgumentException("Ambiguous OpenStack server: '" + serverNameOrId + "' matches "
-                + servers.size() + " servers. Please specify the exact server UUID.");
-        }
-        return servers.getFirst().getId();
-    }
-
     public FlavorResponses.Flavor getFlavor(String flavorId) throws Exception {
         authenticate();
         var uri = this.computeUrl + "/flavors/" + pathSegment(flavorId);

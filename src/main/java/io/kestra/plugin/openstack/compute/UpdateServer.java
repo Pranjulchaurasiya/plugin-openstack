@@ -100,7 +100,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
     private Property<Boolean> autoConfirmResize = Property.ofValue(true);
 
     @Schema(
-        title = "Timeout for resize operations",
+        title = "Wait timeout for resize operations",
         description = """
             Maximum time to wait for the server to reach `VERIFY_RESIZE` and then `ACTIVE`.
             Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
@@ -108,7 +108,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
+    private Property<Duration> waitTimeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Schema(
         title = "Server metadata",
@@ -137,7 +137,7 @@ public class UpdateServer extends AbstractComputeTask implements RunnableTask<Up
         var rDescription = runContext.render(this.serverDescription).as(String.class).orElse(null);
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rAutoConfirm = runContext.render(this.autoConfirmResize).as(Boolean.class).orElse(true);
-        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
+        var rTimeout = validateTimeout(runContext.render(this.waitTimeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rNetworkId = runContext.render(this.networkId).as(String.class).orElse(null);
 

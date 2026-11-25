@@ -454,7 +454,7 @@ class OpenStackComputeTest {
         .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
         .serverId(Property.ofValue("del-srv-01"))
         .waitUntilComplete(Property.ofValue(true))
-        .timeout(Property.ofValue(Duration.ofSeconds(5)))
+        .waitTimeout(Property.ofValue(Duration.ofSeconds(5)))
         .build();
 
     var output = task.run(runContext);
@@ -623,8 +623,23 @@ class OpenStackComputeTest {
                   "server": {
                     "id": "source-srv-01",
                     "name": "original-server",
-                    "flavor": {"id": "flavor-m1-medium-id"}
+                    "flavor": {"original_name": "m1.medium", "vcpus": 2, "ram": 4096}
                   }
+                }
+                """)));
+
+    wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/m1.medium"))
+        .willReturn(aResponse().withStatus(404)));
+
+    wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/flavors/detail"))
+        .willReturn(aResponse()
+            .withStatus(200)
+            .withHeader("Content-Type", "application/json")
+            .withBody("""
+                {
+                  "flavors": [
+                    {"id": "flavor-m1-medium-id", "name": "m1.medium"}
+                  ]
                 }
                 """)));
 
@@ -827,7 +842,7 @@ class OpenStackComputeTest {
         .serverId(Property.ofValue("srv-01"))
         .flavorRef(Property.ofValue("flv-large"))
         .autoConfirmResize(Property.ofValue(true))
-        .timeout(Property.ofValue(Duration.ofSeconds(5)))
+        .waitTimeout(Property.ofValue(Duration.ofSeconds(5)))
         .build();
 
     var output = task.run(runContext);

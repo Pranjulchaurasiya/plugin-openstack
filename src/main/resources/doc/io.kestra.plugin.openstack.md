@@ -52,18 +52,20 @@ In OpenStack, VM snapshots created via Nova's `createImage` action are stored an
 
 - **CreateServer**: Provision a new Nova VM instance with automatic name resolution (flavor, image, network) and base64 cloud-init encoding.
   - **Required fields**: `name`, `flavorRef` (flavor UUID or name)
-  - **Optional fields**: `imageRef` (image UUID or name), `networks` (list of network/port UUIDs or names), `keyName`, `userData`, `metadata`, `adminPass`, `serverDescription`, `tags`, `waitUntilComplete` (defaults to `true`), `timeout`
+  - **Optional fields**: `imageRef` (image UUID or name), `networks` (list of network/port UUIDs or names), `keyName`, `userData`, `metadata`, `adminPass`, `serverDescription`, `tags`, `waitUntilComplete` (defaults to `true`), `waitTimeout`
 - **ListServers**: Query servers with regex filtering, status filters, and pagination markers; supports `FETCH`, `FETCH_ONE`, and `STORE` (persisted to Kestra internal storage) fetch modes.
-  - **Optional fields**: `fetchType` (`FETCH`, `FETCH_ONE`, `STORE`), `name`, `nameRegex`, `status` (`ACTIVE`, `SHUTOFF`, `ERROR`, etc.), `changesSince`, `limit`, `marker`
+  - **Optional fields**: `fetchType` (`FETCH`, `FETCH_ONE`, `STORE`), `name`, `nameRegex`, `status` (`ACTIVE`, `SHUTOFF`, `ERROR`, etc.), `changesSince`, `limit`, `pageSize`, `marker`
 - **UpdateServer**: Update mutable attributes (name, server description, flavor resize with auto-confirmation, network attachments, metadata) of an existing server.
   - **Required fields**: `serverId`
-  - **Optional fields**: `name`, `serverDescription`, `flavorRef`, `autoConfirmResize` (defaults to `true`), `metadata`, `networkId`
+  - **Optional fields**: `name`, `serverDescription`, `flavorRef`, `autoConfirmResize` (defaults to `true`), `waitTimeout`, `metadata`, `networkId`
 - **DeleteServer**: Terminate and permanently delete a VM instance.
   - **Required fields**: `serverId`
 - **GetServerMetadata**: Retrieve key-value metadata attached to a server.
   - **Required fields**: `serverId`
 
 ### Power & Instance State Management
+
+All lifecycle action tasks (`DeleteServer`, `StartServer`, `StopServer`, `RebootServer`, `ResetServer`, `SuspendServer`, `ResumeServer`) accept `waitUntilComplete` (defaults to `false`) and `waitTimeout` (defaults to `PT10M`).
 
 - **StartServer**: Power on a stopped/shutoff server instance.
   - **Required fields**: `serverId`
@@ -92,9 +94,9 @@ In OpenStack, VM snapshots created via Nova's `createImage` action are stored an
   - **Required fields**: `serverId`, `imageId`
 - **CloneServer**: Orchestrate automated server cloning by snapshotting a source server, waiting for the snapshot to become active in Glance, and launching a new instance from that snapshot.
   - **Required fields**: `sourceServerId`, `name`
-  - **Optional fields**: `flavorRef`, `networks`, `snapshotName`, `deleteSnapshotAfterClone` (defaults to `false`), `timeout`
+  - **Optional fields**: `flavorRef`, `networks`, `snapshotName`, `deleteSnapshotAfterClone` (defaults to `false`), `waitTimeout`
 
 ## Trigger
 
 - **Trigger**: Polling trigger that monitors OpenStack Nova compute servers for state changes and lifecycle events using KV Store watermarking and event filtering.
-  - **Properties**: `status`, `serverNameRegex`, `eventType` (`ALL`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`), `maxEvents` (defaults to 50), `interval` (defaults to `PT1M`)
+  - **Properties**: `status`, `serverNameRegex`, `eventType` (`ALL`, `CREATE`, `START`, `STOP`, `REBOOT`, `PAUSE`, `SUSPEND`, `RESUME`, `DELETE`, `RESIZE`, `REBUILD`), `maxEvents` (defaults to 50), `interval` (defaults to `PT1M`)

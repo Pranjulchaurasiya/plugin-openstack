@@ -33,7 +33,7 @@ tasks:
       environment: "production"
       managed_by: "kestra"
     waitUntilComplete: true
-    timeout: PT10M
+    waitTimeout: PT10M
 
   - id: get_metadata
     type: io.kestra.plugin.openstack.compute.GetServerMetadata
@@ -59,7 +59,7 @@ tasks:
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
     serverId: "{{ outputs.create_server.serverId }}"
     waitUntilComplete: true
-    timeout: PT5M
+    waitTimeout: PT5M
 
   - id: start_server
     type: io.kestra.plugin.openstack.compute.StartServer
@@ -68,7 +68,7 @@ tasks:
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
     serverId: "{{ outputs.create_server.serverId }}"
     waitUntilComplete: true
-    timeout: PT5M
+    waitTimeout: PT5M
 
   - id: delete_server
     type: io.kestra.plugin.openstack.compute.DeleteServer
@@ -77,4 +77,4 @@ tasks:
     applicationCredentialSecret: "{{ secret('OS_APP_CRED_SECRET') }}"
     serverId: "{{ outputs.create_server.serverId }}"
     waitUntilComplete: true
-    timeout: PT5M
+    waitTimeout: PT5M

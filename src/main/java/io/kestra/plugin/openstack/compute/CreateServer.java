@@ -160,7 +160,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     private Property<Boolean> waitUntilComplete = Property.ofValue(true);
 
     @Schema(
-        title = "Timeout duration",
+        title = "Wait timeout duration",
         description = """
             Maximum duration to wait for the server to reach `ACTIVE` status when `waitUntilComplete` is true.
             Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
@@ -168,7 +168,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
+    private Property<Duration> waitTimeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Override
     public Output run(RunContext runContext) throws Exception {
@@ -186,7 +186,7 @@ public class CreateServer extends AbstractComputeTask implements RunnableTask<Cr
         var rMetadata = runContext.render(this.metadata).asMap(String.class, String.class);
         var rTags = runContext.render(this.tags).asList(String.class);
         var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(true);
-        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
+        var rTimeout = validateTimeout(runContext.render(this.waitTimeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
 
         try (var client = this.createClient(runContext)) {
             var resolvedFlavorId = client.resolveFlavorId(rFlavorRef);

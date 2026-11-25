@@ -85,7 +85,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             Defaults to `FETCH`.
             """
     )
-    @PluginProperty(group = "advanced")
+    @PluginProperty(group = "processing")
     @Builder.Default
     private Property<FetchType> fetchType = Property.ofValue(FetchType.FETCH);
 
@@ -95,7 +95,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             Filter servers by power/lifecycle status (e.g. `ACTIVE`, `SHUTOFF`, `PAUSED`, `ERROR`).
             """
     )
-    @PluginProperty(group = "advanced")
+    @PluginProperty(group = "processing")
     private Property<String> status;
 
     @Schema(
@@ -104,7 +104,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             Filter servers by exact name matching.
             """
     )
-    @PluginProperty(group = "advanced")
+    @PluginProperty(group = "processing")
     private Property<String> name;
 
     @Schema(
@@ -113,7 +113,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             Client-side regex filter applied against server names before returning results.
             """
     )
-    @PluginProperty(group = "advanced")
+    @PluginProperty(group = "processing")
     private Property<String> nameRegex;
 
     @Schema(
@@ -122,7 +122,7 @@ public class ListServers extends AbstractComputeTask implements RunnableTask<Lis
             ISO 8601 timestamp string (e.g. `2026-11-16T00:00:00Z`). Only servers updated since this time will be returned.
             """
     )
-    @PluginProperty(group = "advanced")
+    @PluginProperty(group = "processing")
     private Property<String> changesSince;
 
     @Schema(

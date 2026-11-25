@@ -139,10 +139,10 @@ public abstract class AbstractComputeTask extends Task implements OpenStackConne
             return DEFAULT_TIMEOUT;
         }
         if (timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("`timeout` must be a positive duration");
+            throw new IllegalArgumentException("`waitTimeout` must be a positive duration");
         }
         if (timeout.compareTo(MAX_TIMEOUT) > 0) {
-            throw new IllegalArgumentException("`timeout` cannot exceed " + MAX_TIMEOUT.toHours() + " hours (provided: " + timeout + ")");
+            throw new IllegalArgumentException("`waitTimeout` cannot exceed " + MAX_TIMEOUT.toHours() + " hours (provided: " + timeout + ")");
         }
         return timeout;
     }

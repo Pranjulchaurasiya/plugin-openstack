@@ -46,7 +46,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
     protected Property<Boolean> waitUntilComplete = Property.ofValue(false);
 
     @Schema(
-        title = "Timeout for lifecycle status transition",
+        title = "Wait timeout for lifecycle status transition",
         description = """
             Maximum time to wait for the server status transition when `waitUntilComplete` is true.
             Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
@@ -54,7 +54,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
-    protected Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
+    protected Property<Duration> waitTimeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Override
     public VoidOutput run(RunContext runContext) throws Exception {
@@ -62,7 +62,7 @@ public abstract class AbstractServerActionTask extends AbstractComputeTask imple
         var rServerId = runContext.render(this.serverId).as(String.class)
             .orElseThrow(() -> new IllegalArgumentException("`serverId` is required"));
         var rWait = runContext.render(this.waitUntilComplete).as(Boolean.class).orElse(false);
-        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
+        var rTimeout = validateTimeout(runContext.render(this.waitTimeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
 
         logger.info("Executing {} on OpenStack server '{}'...", actionName(), rServerId);
 

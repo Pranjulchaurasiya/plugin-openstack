@@ -109,7 +109,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
     private Property<Boolean> deleteSnapshotAfterClone = Property.ofValue(false);
 
     @Schema(
-        title = "Timeout for cloning lifecycle operations",
+        title = "Wait timeout for cloning lifecycle operations",
         description = """
             Maximum time to wait for the snapshot to become active and for the cloned server to reach `ACTIVE` status.
             Must be a positive duration up to 6 hours. Defaults to 10 minutes (`PT10M`).
@@ -117,7 +117,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
     )
     @PluginProperty(group = "advanced")
     @Builder.Default
-    private Property<Duration> timeout = Property.ofValue(Duration.ofMinutes(10));
+    private Property<Duration> waitTimeout = Property.ofValue(Duration.ofMinutes(10));
 
     @Override
     public Output run(RunContext runContext) throws Exception {
@@ -129,7 +129,7 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
         var rFlavorRef = runContext.render(this.flavorRef).as(String.class).orElse(null);
         var rSnapshotName = runContext.render(this.snapshotName).as(String.class).orElse(rName + "-snapshot");
         var rDeleteSnap = runContext.render(this.deleteSnapshotAfterClone).as(Boolean.class).orElse(false);
-        var rTimeout = validateTimeout(runContext.render(this.timeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
+        var rTimeout = validateTimeout(runContext.render(this.waitTimeout).as(Duration.class).orElse(DEFAULT_TIMEOUT));
         var rNetworks = runContext.render(this.networks).asList(CreateServer.NetworkAttachment.class);
 
         logger.info("Cloning OpenStack server '{}' to new server '{}'...", rSourceServerId, rName);
@@ -138,10 +138,20 @@ public class CloneServer extends AbstractComputeTask implements RunnableTask<Clo
             var sourceServer = client.getServer(rSourceServerId);
 
             if (rFlavorRef == null) {
-                if (sourceServer.getFlavor() != null && sourceServer.getFlavor().get("id") != null) {
-                    rFlavorRef = sourceServer.getFlavor().get("id").toString();
-                } else {
-                    throw new IllegalStateException("Could not resolve flavor ID from source server '" + rSourceServerId + "'.");
+                var flavor = sourceServer.getFlavor();
+                String sourceFlavorRef = null;
+                if (flavor != null && flavor.get("original_name") != null) {
+                    sourceFlavorRef = flavor.get("original_name").toString();
+                } else if (flavor != null && flavor.get("id") != null) {
+                    sourceFlavorRef = flavor.get("id").toString();
+                }
+                if (sourceFlavorRef == null) {
+                    throw new IllegalStateException("Could not resolve flavor from source server '" + rSourceServerId + "'; please provide `flavorRef` explicitly.");
+                }
+                try {
+                    rFlavorRef = client.resolveFlavorId(sourceFlavorRef);
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException("Source server flavor '" + sourceFlavorRef + "' could not be resolved; please provide `flavorRef` explicitly.", e);
                 }
             } else {
                 rFlavorRef = client.resolveFlavorId(rFlavorRef);

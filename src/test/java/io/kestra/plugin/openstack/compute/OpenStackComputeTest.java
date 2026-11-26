@@ -697,6 +697,8 @@ class OpenStackComputeTest {
     assertNotNull(output);
     assertThat(output.getServerId(), is("clone-srv-01"));
     assertThat(output.getSnapshotImageId(), is("snap-clone-image-1"));
+    wireMockServer.verify(1, postRequestedFor(urlEqualTo("/compute/v2.1/servers"))
+        .withRequestBody(matchingJsonPath("$.server[?(@.flavorRef == 'flavor-m1-medium-id')]")));
   }
 
   @Test

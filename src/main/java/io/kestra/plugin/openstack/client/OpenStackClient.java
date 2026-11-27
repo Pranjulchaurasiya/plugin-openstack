@@ -696,7 +696,11 @@ public class OpenStackClient implements Closeable {
         } catch (HttpClientResponseException e) {
             var response = e.getResponse();
             var statusCode = response != null && response.getStatus() != null ? response.getStatus().getCode() : 0;
-            var errorBody = response != null && response.getBody() != null ? response.getBody().toString() : "";
+            var errorBody = switch (response != null ? response.getBody() : null) {
+                case byte[] bytes -> new String(bytes, StandardCharsets.UTF_8);
+                case Object body -> body.toString();
+                case null -> "";
+            };
 
             if (statusCode == 401 || statusCode == 403) {
                 throw new IllegalStateException("OpenStack authentication/authorization failed (HTTP " + statusCode

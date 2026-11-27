@@ -725,7 +725,7 @@ class OpenStackComputeTest {
 
   @Test
   void testServer404NotFound() {
-    wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/non-existent-srv"))
+    wireMockServer.stubFor(get(urlEqualTo("/compute/v2.1/servers/non-existent-srv/metadata"))
         .willReturn(aResponse()
             .withStatus(404)
             .withHeader("Content-Type", "application/json")
@@ -743,6 +743,31 @@ class OpenStackComputeTest {
 
     var exception = assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
     assertThat(exception.getMessage(), containsString("OpenStack resource not found (HTTP 404)"));
+    assertThat(exception.getMessage(), containsString("Server not found"));
+    assertThat(exception.getMessage(), not(containsString("[B@")));
+  }
+
+  @Test
+  void testServer409ConflictIncludesResponseBody() {
+    wireMockServer.stubFor(post(urlEqualTo("/compute/v2.1/servers/conflict-srv/action"))
+        .willReturn(aResponse()
+            .withStatus(409)
+            .withHeader("Content-Type", "application/json")
+            .withBody("{\"conflictingRequest\": {\"message\": \"Cannot 'stop' instance while it is in vm_state stopped\"}}")));
+
+    var runContext = runContextFactory.of();
+
+    var task = StopServer.builder()
+        .id("conflict_task_" + IdUtils.create())
+        .authUrl(Property.ofValue(authUrl))
+        .applicationCredentialId(Property.ofValue("app-cred-id"))
+        .applicationCredentialSecret(Property.ofValue("app-cred-secret"))
+        .serverId(Property.ofValue("conflict-srv"))
+        .build();
+
+    var exception = assertThrows(IllegalStateException.class, () -> task.run(runContext));
+    assertThat(exception.getMessage(), containsString("OpenStack conflict (HTTP 409)"));
+    assertThat(exception.getMessage(), containsString("Cannot 'stop' instance while it is in vm_state stopped"));
   }
 
   @Test
